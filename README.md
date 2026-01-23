@@ -3,6 +3,11 @@
 <b>view: <a href="https://github.com/gamerjamer43/stickvm">StickVM</a></b><br>
 <b>also: <a href="https://github.com/gamerjamer43/stickcompiler">StickCompiler</a></b>
 
+---
+
+**[Planned Syntax](#planned-syntax)**<br>
+**[Planned Features](#planned-features)**
+
 ### Planned Syntax:
 **ALSO ON THE TODO: complete the spec. this is not fully done, just some primitive features. see other repo for rn
 
@@ -83,6 +88,13 @@ const i32 fuck := 42
 let global shit: i32 := 42
 ```
 
+Only container I'm natively supporting is arrays. Everything else will be from std.containers or something:
+```
+// empty slots r implicitly nulled
+let array: [i32, 42] := [1, 2, 3]
+array[3] // is null
+```
+
 ---
 
 Control flow is prolly gonna be the same:
@@ -109,7 +121,6 @@ match case:
     }
 ```
 <small><b>*BUTTTT I incorporate Rust features... in C!</b></small>
-
 ---
 
 Functions are simple. Define one with the func keyword and attach params and type.
@@ -133,7 +144,7 @@ You can write function prototypes similar to C, and they can be hidden away with
 //! title: name
 //! desc: returns a greeting with your name
 //! params: name: str = your name
-func name (str name) -> str;
+func name (str name) -> str
 ```
 
 Main is very similar, but will always return an i32 containing 0 if successful or a panic if not (it is implicit so dw).
@@ -193,6 +204,83 @@ class Thing {
     }
 }
 ```
+
+Variables can be scoped private (default, class accessible) and public (anywhere accessible)
+```
+// annotated
+class Thing {
+    pub item: i8, 
+
+    func set (mutable self, value: i8) -> () {
+        self.i8 = value
+    }
+}
+
+// declarative
+class Thing {
+    pub i8 item, 
+
+    func set (mutable self, i8 value) -> () {
+        self.i8 = value
+    }
+}
+```
+
+
+Also... if you don't like a name I provided, sorry. But you can alias it if you really don't like it lol:
+```
+type uint64_t := u64;
+```
+
+---
+
+I plan to offer referencing vs move semantics too, but as a safer concept. Not sure if I'll go thru w this
+```
+// referencing and deref is standard
+*Thing
+&Thing
+
+// slices ofc
+&[u8]
+```
+
+And generics. I'm just getting lazy w the text descriptions will mock em up it's late.
+```
+// may add boxed types but this is too much semantics for my high brain
+class Pair<T, U> {
+    public first: T
+    public second: U
+
+    func new(mutable self, first: T, second: U) {
+        self.first = first;
+        self.second = second;
+    }
+
+    func swap(self) -> Pair<U, T> {
+        return Pair<U, T>(self.second, self.first);
+    }
+}
+
+```
+Also maybe native asynchronicity. Haven't thought abt this yet, may do it via standard lib to make it so Sync and Async are traits like zig.
+```
+// this will allow await and async to be used
+Result<ValidType, ErrType>
+
+async func test (str input) -> Result<ValidType, ErrType> {
+    if input == "yes" return ValidType
+    else return ErrType
+}
+```
+
+Prolly will also add traits (like Rust I am borrowing a lot but it standardizes procedure, may have fallbacks but may force traits)
+```
+TODO
+```
+
+And also decorators (basically wrapper functions, tho i'll try and remove python's inner/outer bs).
+
+---
 
 And I mean that's the basics of it.
 
@@ -271,10 +359,12 @@ stack allocated types*:
   - u64 = the default unsigned integer type
   - f64 = the default float type (double precision)
   - i8, u8, i16, u16, f16 (maybe), i32, u32, and f32 all supported too
+  - enum (and potentially unions) will fix to its largest members size
 
 - standard primitives
   - bool = basically a u8. legit just true or false. 0 = false, != 0 is true
   - char = also a u8. any U+256 character is ok. will be in single quotes: 'c'
+  - ptr = os sized pointer (RTTI type of a pointer, either 32 or 64 bit, will likely fix this to 64 bit OSes and if anyone wants to make a 32 bit one go crazy)
   - idk what else there's gotta be more
 
 heap allocated types**:
@@ -282,12 +372,26 @@ heap allocated types**:
     - allocate a string by just creating a double quote literal "string"
     - interning will be used, and so will slicing
 
-- 
+- 128 bit integers/bigint
+    - not implemented yet, but these will potentially be able to go on the stack in 2 consecutive registers, idk yet
+    - bigint will be arbitrarily sized array of i64, doubling in size when needed
+    - obv both signed and unsigned
 
+- classes/structs
+    - structs are just classes without methods and just the 16 byte RTTI header. otherwise packed properly
+    - classes contain additional methods (still structs cuz C) and have a 40 byte type info.
 
-TODO: heap + gc, heap allocated types
+- more. idk what else i need to add yet
+
+**TODO:** heap + gc, heap allocated types
 ```
 <small><b>*(trying to force anything primitive on the stack. i will say USUALLY stack allocated cuz idk conditions to move to heap.)</b></small><br>
 <small><b>**(there also may be some cases where i can put these on the stack, i just dont know how yet)</b></small>
 
 You may find a lot of the syntax similar to Go and Rust. This is because I've done a lot of reading into the design of C++, Java, Go, Rust, Lua, Python, and as you may see a wide selection of other Bytecode VMs AND fully compiled features (with the goal of making this super easily embeddable. Into what? I don't know, but I'm keeping the footprint light!)
+
+### Planned Features:
+
+I will also be adding an **FFI** layer that should hopefully be fully compatible with both C and Rust. Doing this for bytecode shouldn't be a problem... but once I get to the LLVM backed compiler I'm not so sure. On that we will be TBD.
+
+I also intend to add a **JIT/runtime opt layer** that detects and optimizes hotloops while ur program is running. Additionally, it'll detect some opts the compiler may not be able to do (I don't know WHAT yet), but once we actually FINISH I can research how to write an effective JIT. I hope to get this to >65% of native speed, aiming for ~80%.
