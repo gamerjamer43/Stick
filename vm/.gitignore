@@ -1,0 +1,12 @@
+# idk why make generates .d
+*.d
+
+# and bins/swaps/static/dynamic libs
+*.o
+*.dll
+*.swp
+*.out
+*.exe
+
+# emitted bytecode
+*.stk
