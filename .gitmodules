@@ -1,0 +1,8 @@
+[submodule "compiler"]
+	path = compiler
+	url = https://github.com/gamerjamer43/StickCompiler.git
+	branch = master
+[submodule "vm"]
+	path = vm
+	url = https://github.com/gamerjamer43/StickVM.git
+	branch = main
