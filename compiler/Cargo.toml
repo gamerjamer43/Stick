@@ -1,0 +1,14 @@
+[package]
+name = "frontend"
+version = "0.0.1"
+edition = "2024"
+
+# 25 deps total
+[dependencies]
+# logos is really the fattest at 19 deps and it pulls in chumsky
+logos = "0.16.0"
+
+# ariadne is 4 deps, ansi escapes & button continue r 1 (6 total, light shit)
+ariadne = "0.4"
+strip-ansi-escapes = "0.2"
+press-btn-continue = "0.2" # i'm fucking lazy ok

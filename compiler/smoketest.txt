@@ -1,0 +1,61 @@
+/* test spec for all types of token in the language to make sure they parse right
+it's gonna look ugly but this is prob not how the language will look */
+
+// normal ints and operators
+x = 1_000 + 2 * 3 - 4 / 5 % 2;
+
+// floats and _
+y = 12.34 + 1_000.00;
+
+// string and char
+s = "hi\n \"there\"";
+c = '\n';
+
+// boolean
+t = true;
+f = false;
+
+// boolean operators
+ifx = x == 42 != y >= 3 <= 9 > 1 < 2;
+
+// bitwise operators (~ is unary bitwise negation)
+b = x & 3 | 4 ^ (~5);
+sh = x << 2 >> 1;
+
+// arithmenticassignment ops
+acc += 1; acc -= 2; acc *= 3; acc /= 4; acc %= 5;
+
+// bitwise assignment ops
+mask &= 255; mask |= 1; mask ^= 2; sh <<= 1; sh >>= 1;
+
+// field accesses (-> may not get used, or may not be used for that)
+p = part1->field
+q = part2.field
+
+// lambda operator (may become -> if we dont expose pointers)
+r = part3 => part4
+
+// elipses (may not use for these purposes)
+s = 0..10;
+t = 1...3;
+
+// logical operators
+logic = not true and false or true;
+
+// match cases
+match case:
+    |-> zed;
+
+// call a function
+call(x, y);
+
+// opcodes NEWARR, NEWTABLE, NEWOBJ
+// TODO: implement at parse stage
+// arr = [1, 2, 3];
+// table = {a: 1, b: 2};
+// obj = Thing::new();
+
+// desired behavior
+// char = 'c              // throws untermed char error
+// string = "untermed     // throws untermed string error
+// @                      // throws unknown token error
