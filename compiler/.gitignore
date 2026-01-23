@@ -1,8 +1,0 @@
-# rust shit
-/target/
-
-# log files
-*.log
-
-# privating my todo again
-TODO
