@@ -1,0 +1,6 @@
+# make sure to run `cargo +nightly fmt` to use this properly (stable doesn't like it)
+# if you don't have the toolchain do `rustup toolchain install nightly`
+ignore = [
+    "src/lexer/token.rs",
+    "src/lexer/error.rs",
+]
