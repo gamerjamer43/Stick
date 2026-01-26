@@ -43,56 +43,40 @@ include "file.stk"
 include "./module"
 ```
 ---
-Declarations are still easy, but you have many options on where your vars go (option 1 and 2 are decisions for me):
+Declarations are still easy, but you have many options on where your vars go:
 ```
 /*
  * variables can only contain uppercase and lowercase alphabetical characters, numbers (cannot start with a number) and underscores.
- * := denotes the first time a variable is assigned.
- * now, i have to decide i want to do "let var: type :=" or "type var :=" or BOTH!
  */
-// option 1, type ascription
-let number: i8 := 1
+// typing is done by type ascription
+let number: i8 = 1
 
 // variables are by default immutable. if you want to change it denote it mutable (stolen frm rust)
-let mutable number: i8 = 0;
+let mutable number: i8 = 0
 
 // to send something to the constant pool, denote it const
-const zero: u8 := 0
+let const zero: u8 = 0
 
-// to make something globally accessible (and send to global pool) denote global
-// yeah... simple
-global globular: u8 := 0
-
-// may also add static storage. i have const and global, but if i want static too i have to define semantics
-static counter: u64 := 0
-
-
-// option 2, declarative style typing
-i8 number := 1
-
-const u8 zero := 0
-global u8 globular := 0
-static u64 counter := 0
-
-// leaning towards 1. may allow for both
+// may also add static storage (rn this is global storage). i have const and global, but if i want static too i have to define semantics
+let static counter: u64 = 0
 ```
 
 The only things that can be defined outside of a function scope are constant (fixed mem location fixed value), and globals (fixed mem location aka the global pool)
 ```
 // anything outside of main scope must be constant or global
-// value is constant at runtime. immutable
-const i32 fuck := 42
+// value is constant at runtime. immutable. 
+let const fuck: i32 = 42
 
-// you can define globals outside because their memory location is fixed
+// you can define globals outside because their memory location is fixed (statics might just be any fixed location so i may change this to global)
 // this means a lazy that is evaluated at run time is ok because we know its size at compile time
-let global shit: i32 := 42
+let static shit: i32 := 42
 ```
 
 Only container I'm natively supporting is arrays. Everything else will be from std.containers or something:
 ```
 // empty slots r implicitly nulled
-let array: [i32, 42] := [1, 2, 3]
-array[3] // is null
+let array: [i32: 42] = [1, 2, 3]
+array[3] // is 0, the default for i32. must implement default, but this will come later
 ```
 
 ---
@@ -112,8 +96,8 @@ In typical Rust fashion*, this language will have a heavy emphasis on pattern ma
 ```
 // may change this one. every lang of mine has ONE weird syntax...
 match case:
-    |-> case1: writeln("case1 matched");
-    |-> case2: writeln("case2 matched");
+    |-> case1: writeln("case1 matched")
+    |-> case2: writeln("case2 matched")
 
     // and this is why, kinda complex. might just allow for , sep
     |-> default: {
@@ -127,13 +111,13 @@ Functions are simple. Define one with the func keyword and attach params and typ
 ```
 // this will just be folded into a 42 wherever meaning of life is but...
 func meaning_of_life () -> i64 {
-    return 42;
+    return 42
 }
 
 func name (str name) -> str {
     // potentially making strings use String.new() for heap alloc
     str string = "Hello, " .. name!
-    return string;
+    return string
 }
 ```
 
@@ -172,34 +156,18 @@ writefn "%s", yoName
 
 Now, this language offers both structs and classes. Structs are basically 1-to-1 between C/Rust and Stick.
 ```
-// annotated
 struct Thing {
     item: i8,
-}
-
-// declarative
-struct Thing {
-    i8 item,
 }
 ```
 
 Classes though, like in python, are structs w a little overhead. In this case 16 bytes for RTTI and 16 bytes for method/field storage.
 ```
-// annotated
 class Thing {
     item: i8,
 
     // not sure how imma deal w borrow cemantics and ref/deref yet, so thats left out
     func set (mutable self, value: i8) -> () {
-        self.i8 = value
-    }
-}
-
-// declarative
-class Thing {
-    i8 item, 
-
-    func set (mutable self, i8 value) -> () {
         self.i8 = value
     }
 }
@@ -215,21 +183,11 @@ class Thing {
         self.i8 = value
     }
 }
-
-// declarative
-class Thing {
-    pub i8 item, 
-
-    func set (mutable self, i8 value) -> () {
-        self.i8 = value
-    }
-}
 ```
-
 
 Also... if you don't like a name I provided, sorry. But you can alias it if you really don't like it lol:
 ```
-type uint64_t := u64;
+type uint64 = u64
 ```
 
 ---
@@ -252,16 +210,68 @@ class Pair<T, U> {
     public second: U
 
     func new(mutable self, first: T, second: U) {
-        self.first = first;
-        self.second = second;
+        self.first = first
+        self.second = second
     }
 
     func swap(self) -> Pair<U, T> {
-        return Pair<U, T>(self.second, self.first);
+        return Pair<U, T>(self.second, self.first)
+    }
+}
+```
+
+There will also be a nice class hierarchy similar to java's which I really like
+```
+class Parent {
+    name: str
+
+    // at least one new is forced public, along w a handful of others
+    pub func new (mutable self, name: str) {
+        this.name = name
+    }
+
+    // publicly scoped functions (leave off pub for private scoping)
+    pub func hi (self) {
+        writeln("hi {self.name}")
     }
 }
 
+class Child extends Parent {
+    func new (mutable self, name: str) {
+        // may support implicit args thru plain super
+        // but for now just super.new
+        super.new(name)
+    }
+}
 ```
+
+And interfacing:
+```
+interface Shape {
+    sides: i16
+    name: str
+
+    pub fn new (mutable self)
+}
+
+class Square impls Shape {
+    pub fn new (mutable self) {
+        self.sides = 4
+        self.name = "Square"
+    }
+}
+
+// structs don't miss out on the fun! just attatches an extra 8 byte function pointer (make sure to properly align if ur worried abt data size...)
+struct Circle impls Shape {
+    // the same
+}
+```
+
+Potentially will allow for one line functions using =>
+```
+func new (mutable self, name: str) => this.name = name
+```
+
 Also maybe native asynchronicity. Haven't thought abt this yet, may do it via standard lib to make it so Sync and Async are traits like zig.
 ```
 // this will allow await and async to be used
@@ -271,6 +281,12 @@ async func test (str input) -> Result<ValidType, ErrType> {
     if input == "yes" return ValidType
     else return ErrType
 }
+
+let res: Result<ValidType, ErrType> = await test("hi")
+match res {
+    ResultType => writeln("yea this worked"),
+    ErrType => writeln!("FAILED")
+}
 ```
 
 Prolly will also add traits (like Rust I am borrowing a lot but it standardizes procedure, may have fallbacks but may force traits)
@@ -279,6 +295,9 @@ TODO
 ```
 
 And also decorators (basically wrapper functions, tho i'll try and remove python's inner/outer bs).
+```
+TODO
+```
 
 ---
 
