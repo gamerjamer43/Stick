@@ -41,8 +41,8 @@ RM := rm -f
 all: test $(TARGET)
 
 test: clean $(TARGET)
-	$(PYTHON) test.py
-	$(PYTHON) runner.py
+	$(PYTHON) ./utils/test.py
+	$(PYTHON) ./utils/runner.py
 
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

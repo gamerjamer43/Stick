@@ -1,6 +1,10 @@
 # idk why make generates .d
 *.d
 
+# and i forgot abt pycache fuckin a
+**/__pycache__
+*.pyc
+
 # and bins/swaps/static/dynamic libs
 *.o
 *.dll

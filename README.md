@@ -19,6 +19,7 @@
 - [Quickstart](#quickstart)
 - [Current Instruction Set](#currently-implemented)
 - [File Format](#file-format)
+- [Utils](#utils)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 <!-- - [Architecture](#architecture) add somewhere -->
@@ -126,8 +127,8 @@ A lot of moving parts come together to make this so fast. A combination of multi
 **Registers:** One array alloced at the start of runtime, which is shared across all `Frame`s in scope. Each `Frame` has a `base` offset and `regc` count defining its window into the register file.
 **Values:** 9-byte structs with 1-byte type tag + 8-byte payload. Registers store types and payloads separately for cache efficiency, as letting the 8 byte values fill out first leaves us just reading 1 byte values without worries about alignment.
 
-## Currently Implemented*
-***(and passing tests)**
+## Currently Implemented
+**(and passing tests)**
 
 ### Control Flow
 | Opcode | Args | Description |
@@ -206,6 +207,12 @@ The body contains a list of 32 bit instructions (count matches the listed instru
 │ Globals (1 byte type + 8 byte val) │
 └────────────────────────────────────┘
 ```
+
+## Utils
+This repo also comes with a couple utilities I used during the build process. This list includes:
+- test.py: the test generator (shitty name ik) that comes with 78 cases, ranging from normal functionality to a few edge cases, AFAIK mostly encompassing.
+- runner.py: takes optional args for a path (defaults to .\vm.exe, change if ur not on windows scrub!); a directory (defaults to .\tests); a command wrapper (none by default, this is helpful if testing w/ valgrind or ASan/UBSan); and an optional flag on whether to print the output from the VM.
+- disassemble.py: disassemble the instructions .stk bytecode files into more human readable output than 16 hex values. looks more like what the developer sees thru the enum.
 
 ## Roadmap
 **MAIN DESIGN GOALS:**

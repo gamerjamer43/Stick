@@ -6,7 +6,6 @@
  * the plan is deffo a lot longer than the impl
  * 
  */
-
 #ifndef HEAP_H
 #define HEAP_H
 
@@ -85,6 +84,8 @@ typedef struct MethodInfo {
 } MethodInfo;               // = 24 bytes (div by 8 valid)
 
 // per-instance header (one per object)
+// stack objects die with frames, anything on the heap will be marked with a header (TODO figure out how to point to the object without using 24 fucking bytes)
+// heap has been hellish for me
 typedef struct ObjHeader {
     ObjInfo *info;          // 8 bytes - points to shared type metadata
     u32 size;               // 4 bytes - allocation size
