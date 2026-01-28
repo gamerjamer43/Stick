@@ -64,7 +64,7 @@ let static counter: u64 = 0
 The only things that can be defined outside of a function scope are constant (fixed mem location fixed value), and globals (fixed mem location aka the global pool)
 ```
 // anything outside of main scope must be constant or global
-// value is constant at runtime. immutable. 
+// value is constant at runtime. immutable.
 let const fuck: i32 = 42
 
 // you can define globals outside because their memory location is fixed (statics might just be any fixed location so i may change this to global)
@@ -105,6 +105,7 @@ match case:
     }
 ```
 <small><b>*BUTTTT I incorporate Rust features... in C!</b></small>
+
 ---
 
 Functions are simple. Define one with the func keyword and attach params and type.
@@ -129,6 +130,30 @@ You can write function prototypes similar to C, and they can be hidden away with
 //! desc: returns a greeting with your name
 //! params: name: str = your name
 func name (str name) -> str
+```
+
+If a function is called often, make sure to let the compiler know it should be inlined!
+```
+inline func resolveRole (int id) -> str {
+    // match is first class!!!
+    return match id {
+        |-> 1: "admin"
+        |-> 2: "moderator"
+        |-> 3..5: "MIDerator"
+        |-> _: "user"
+    }
+}
+
+// now wherever a call happens, it gets replaced with the body
+let role: str = resolveRole(id)
+
+// what really happens is:
+let role: str = match id {
+    |-> 1: "admin"
+    |-> 2: "moderator"
+    |-> 3..5: "MIDerator"
+    |-> _: "user"
+}
 ```
 
 Main is very similar, but will always return an i32 containing 0 if successful or a panic if not (it is implicit so dw).
@@ -173,11 +198,11 @@ class Thing {
 }
 ```
 
-Variables can be scoped private (default, class accessible) and public (anywhere accessible)
+Variables can be scoped private (default, class accessible, program accessible if not inside a class) and public (anywhere in the module accessible)
 ```
 // annotated
 class Thing {
-    pub item: i8, 
+    pub item: i8,
 
     func set (mutable self, value: i8) -> () {
         self.i8 = value
@@ -190,7 +215,7 @@ Also... if you don't like a name I provided, sorry. But you can alias it if you 
 type uint64 = u64
 ```
 
----
+## Planned Implementations (not lexed/parsed fully yet)
 
 I plan to offer referencing vs move semantics too, but as a safer concept. Not sure if I'll go thru w this
 ```
@@ -251,20 +276,43 @@ interface Shape {
     sides: i16
     name: str
 
-    pub fn new (mutable self)
+    // implictly public see below
+    func new (mutable self)
 }
 
+// remember interfaces must implement all methods
 class Square impls Shape {
-    pub fn new (mutable self) {
+    // new is implicitly class static and public (static will be like java)
+    func new (mutable self) {
         self.sides = 4
         self.name = "Square"
     }
+
+    // method overloading supported
+    pub func new (mutable self, str name) {
+        self.sides = 4
+        self.name = name
+    }
 }
 
-// structs don't miss out on the fun! just attatches an extra 8 byte function pointer (make sure to properly align if ur worried abt data size...)
+// structs don't miss out on the fun! gonna figure out how rust does it, but any impl/trait attaches ZERO EXTRA OVERHEAD.
+// i believe theyre just considered normal functions and are in turn stored in the code section
 struct Circle impls Shape {
     // the same
 }
+```
+
+This language supports tail call recursion! Use it where you can! I may make it write it in where you can use it but don't as well.
+```
+func fib(n: i64, a: i64 = 0, b: i64 = 0) -> i64 {
+    if (n == 0) return a
+    if (n == 1) return b
+
+    // reuse current stack frame!!!
+    return fib(n - 1, b, a + b)
+}
+
+let computed: i64 = fib(100)
 ```
 
 Potentially will allow for one line functions using =>
@@ -278,23 +326,19 @@ Also maybe native asynchronicity. Haven't thought abt this yet, may do it via st
 Result<ValidType, ErrType>
 
 async func test (str input) -> Result<ValidType, ErrType> {
-    if input == "yes" return ValidType
+    if (input == "yes") return ValidType
     else return ErrType
 }
 
 let res: Result<ValidType, ErrType> = await test("hi")
-match res {
-    ResultType => writeln("yea this worked"),
-    ErrType => writeln!("FAILED")
-}
+
+// might get rid of match arm in favor of just Value: branch, Value2: { body }
+match res.eval():
+    |-> ResultType: writeln("yea this worked"),
+    |-> ErrType:    writeln!("FAILED")
 ```
 
 Prolly will also add traits (like Rust I am borrowing a lot but it standardizes procedure, may have fallbacks but may force traits)
-```
-TODO
-```
-
-And also decorators (basically wrapper functions, tho i'll try and remove python's inner/outer bs).
 ```
 TODO
 ```
@@ -407,10 +451,10 @@ heap allocated types**:
 <small><b>*(trying to force anything primitive on the stack. i will say USUALLY stack allocated cuz idk conditions to move to heap.)</b></small><br>
 <small><b>**(there also may be some cases where i can put these on the stack, i just dont know how yet)</b></small>
 
-You may find a lot of the syntax similar to Go and Rust. This is because I've done a lot of reading into the design of C++, Java, Go, Rust, Lua, Python, and as you may see a wide selection of other Bytecode VMs AND fully compiled features (with the goal of making this super easily embeddable. Into what? I don't know, but I'm keeping the footprint light!)
+You may find a lot of the syntax similar to Go and Rust. This is because I've done a lot of reading into the design of C++, Java, Go, Rust, Lua, Python, and as you may see a wide selection of other Bytecode VMs AND fully compiled features (with the goal of making this super easily embeddable. Into what? I don't know, but I'm keeping the footprint light!) I feel it's leaning a bit too rustic so I may switch some shit up, but my real goal is safe code in a web embedded environment. The compiler will do a lot of the work for you in that regard making it easy to work with it. The runtime should also handle enough opt to where you think "damn. it abstracts JUST enough."
 
 ### Planned Features:
 
 I will also be adding an **FFI** layer that should hopefully be fully compatible with both C and Rust. Doing this for bytecode shouldn't be a problem... but once I get to the LLVM backed compiler I'm not so sure. On that we will be TBD.
 
-I also intend to add a **JIT/runtime opt layer** that detects and optimizes hotloops while ur program is running. Additionally, it'll detect some opts the compiler may not be able to do (I don't know WHAT yet), but once we actually FINISH I can research how to write an effective JIT. I hope to get this to >65% of native speed, aiming for ~80%.
+I also intend to add a **JIT/runtime opt layer** that detects and optimizes hotloops while ur program is running. Additionally, it'll detect some opts the compiler may not be able to do (I don't know WHAT yet), but once we actually FINISH I can research how to write an effective JIT. I hope to get this to >50% of native speed cold, if I can REALLY nail the hot loops this could reach upwards of ~80% native tho.
