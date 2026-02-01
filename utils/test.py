@@ -33,7 +33,7 @@ class Opcode(IntEnum):
     # bitwise
     AND = auto(); OR = auto(); XOR = auto()
     LNOT = auto(); BNOT = auto()
-    SHL = auto(); SHR = auto(); SAR = auto()
+    SHL = auto(); SHR = auto();
 
     # heap/tables/arrays/strings (placeholders for now)
     NEWARR = auto(); NEWTABLE = auto(); NEWOBJ = auto()
@@ -235,10 +235,13 @@ TESTS += [
     pass_if_truthy(Opcode.BNOT, "bnot_basic", [LOADI(0, 0), UN(Opcode.BNOT, 0)], 0),
 ]
 
-# bit shifts (sar is TODO)
+# bit shifts
 TESTS += [
     pass_if_truthy(Opcode.SHL, "shl_basic", [LOADI(0, 1), LOADI(1, 4), BIN(Opcode.SHL, 2, 0, 1)], 2),
     pass_if_truthy(Opcode.SHR, "shr_basic", [LOADI(0, 16), LOADI(1, 2), BIN(Opcode.SHR, 2, 0, 1)], 2),
+    pass_if_truthy(Opcode.SHR, "shr_sar_basic", [
+        LOADC(0, 0), LOADI(1, 2), BIN(Opcode.SHR, 2, 0, 1)
+    ], 2, consts=(i64(-64),)),
 ]
 
 # edge testing
@@ -420,6 +423,16 @@ TESTS += [
         HALT(), PANIC(),
         LOADI(0, 999), STOREG(0, 1), ins(Opcode.RET, 0)
     ], consts=(func(10, 0, 4),), globs=(i64(0), i64(0))),
+
+    # test a tail call (reuses current stack frame)
+    # main calls func A, A tailcalls func B, which then returns 123 to main
+    # ts was buggin so comments!!!
+    TestCase(Opcode.TAILCALL, "call_tailcall_basic", [
+        LOADC(0, 0), ins(Opcode.CALL, 0, 0, 1),   # call func A
+        JMPIFZ(1, 1), HALT(), PANIC(),            # check result
+        LOADC(0, 1), ins(Opcode.TAILCALL, 0, 0),  # tailcall B
+        LOADI(0, 123), ins(Opcode.RET, 0)         # func B returns 123
+    ], consts=(func(5, 0, 4), func(7, 0, 4))),
 ]
 
 # ensure dir then run each test inside

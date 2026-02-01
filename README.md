@@ -284,7 +284,6 @@ I hope this creates for an interesting (and original) concept that gives you the
 - [ ] Make arithmetic operations work with any numeric type (avoid the need for unsigned operators) [DOUBLE CHECK THIS]
 - [ ] TCO and the TAILCALL opcode (force it where you can)
 - [ ] Unsigned ops (DIVU, MODU, GTU, GEU, LTU, LEU)
-- [ ] SAR (arithmetic shift right)
 
 ### 🎯 High Priority
 - [ ] Frontend compiler (Stick language → bytecode, handwriting a parser rn)

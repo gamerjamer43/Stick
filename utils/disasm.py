@@ -65,7 +65,7 @@ def format_instr(idx: int, word: int) -> str:
     
     # all binary ops
     if name in (
-        "AND","OR","XOR","SHL","SHR","SAR",
+        "AND","OR","XOR","SHL","SHR",
         "I2D","I2F","D2I","F2I","I2U","U2I","U2D","U2F","D2U","F2U",
         "ADD","SUB","MUL","DIV","MOD","EQ","NEQ","GT","GE","LT","LE",
         "ADD_U","SUB_U","MUL_U","DIV_U","MOD_U","EQ_U","NEQ_U","GT_U","GE_U","LT_U","LE_U",

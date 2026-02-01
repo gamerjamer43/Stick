@@ -52,7 +52,6 @@ typedef enum {
     // shifts
     SHL,       // shift left src1 by src2 and store in src0 (signed ints only)
     SHR,       // shift right src1 by src2 and store in src0 (signed ints only)
-    SAR,       // arithmetic shift right src1 by src2 and store in src0 (signed ints only)
 
     // heap
     NEWARR,    // dst = new array(length)

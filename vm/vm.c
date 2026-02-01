@@ -515,6 +515,48 @@ bool vm_run(VM* vm) {
                 break;
             }
 
+            case TAILCALL: {
+                u32 reg  = op_a(ins);
+                u16 argc = op_b(ins);
+
+                // this register contains the callable
+                u32 abs = reg + vm->current->base;
+                if (!ensure_regs(vm, abs + 1)) return false;
+
+                // type checks, remove during prod
+                // TODO: bytecode verifier!!!!!!!!!
+                if (vm->regs->types[abs] != CALLABLE) {
+                    vm->panic_code = PANIC_INVALID_CALLABLE;
+                    return false;
+                }
+
+                Func* fn = vm->regs->payloads[abs].fn;
+                if (!fn || fn->kind != BYTECODE) {
+                    vm->panic_code = PANIC_INVALID_CALLABLE;
+                    return false;
+                }
+
+                // validate arg count
+                if (argc != fn->as.bc.argc) {
+                    vm->panic_code = PANIC_CALL_FAILED;
+                    return false;
+                }
+
+                // refresh locals (abs + 1 is first arg)
+                u32 base = vm->current->base;
+                for (u16 i = 0; i < argc; i++) {
+                    vm->regs->types[base + i] = vm->regs->types[abs + 1 + i];
+                    vm->regs->payloads[base + i] = vm->regs->payloads[abs + 1 + i];
+                }
+
+                // overwrite frame data and jump back to start
+                // (this is a recursive call without a push)
+                vm->current->callee = fn;
+                vm->current->regc = fn->as.bc.regc;
+                vm->ip = fn->as.bc.entry_ip;
+                break;
+            }
+
             // return from function: RET register
             case RET: {
                 u32 ret = op_a(ins);
@@ -566,8 +608,9 @@ bool vm_run(VM* vm) {
             case OR:    BINOP_I64(|);  break;
             case XOR:   BINOP_I64(^);  break;
             case SHL:   BINOP_I64(<<); break;
+
+            // SAR AND SHR BOTH THE SAME. FIGURE OUT WAG1
             case SHR:   BINOP_I64(>>); break;
-            // case SAR: figure out what to allow
 
             // unsigned ops (u64)
             case ADD_U: BINOP_U64(+);  break;
