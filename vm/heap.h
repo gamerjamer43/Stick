@@ -1,208 +1,226 @@
 /**
  * @file heap.h
  * @author Noah Mingolelli
- * @brief header used for heap and garbage collection. will doc later
- * uncertain if im even gonna use all of this, just some common things i need before actually implementing this.
- * the plan is deffo a lot longer than the impl
- * 
+ * @brief header for the heap implementation and gc. heap is a type bucketted system, gc marks based on tricolor and generational
+ * how this works:
+ * - buckets store by by TYPE, not size. that way each bucket knows what type is inside.
+ * - each bucket has a bump allocator. yay o(1)
+ * - mark bits are kept separate to be nice to the cache
+ * - young objects get collected often, and the survivors are moved to a new bucket
+ * - a HeapRef is a packed 32 bit pointer, see below
  */
 #ifndef HEAP_H
 #define HEAP_H
 
 #include "typing.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
-// I HAVE TWO OPTIONS FOR EXPOSING POINTERS TO OBJECTS ON THE HEAP.
-// VIRTUAL POINTERS - store pointers to a specific index in a list, do pointer arithmetic. could pointer pack (or cap @ 4b vals on the heap)
-// OR
-// RAW POINTERS - store pointers to the actual raw object in memory. then its just a reference, though i would want to add guards which could cost cycles.
-// choice is likely raw though i will add a light safety element
+// gc colors
+#define MARK_WHITE 0   // proven unreachable (or not yet seen)
+#define MARK_GRAY  1   // reachable but children not scanned
+#define MARK_BLACK 2   // reachable and fully scanned
 
-// ALSO TWO OPTIONS FOR HEAP:
-// BUMP ALLOC, FREE GENERATIONALLY. allocate young objects that die often together (heap objects only used in a local scope, other shit). cons are i'm locked into generational frees
-// OR
-// FREELIST, GENERATIONAL AND OCCASIONAL DIRECT FREES BASED ON LIFETIME: (i could have an optional lifetime system for better gc handling, 
-// and objects can be freed at specific timings by the compiler), cons if i do compiler timings i would have to bake it into the bytecode (dont know how), allocs and frees would cost more than
-// a bump allocator (which is the cost for better handling)
-// choice is uncertain. free list might make it easier to make a lighter gc op using threading, though i have to figure out if i can ever avoid the pause
+// default initial capacity per bucket
+#define DEFAULT_BUCKET_CAP 64
 
-// can only be one of 3 colors: 
-// - white = proven unreachable
-// - gray = proven reachable but pointers not scanned
-// - black = proven reachable and scanned
-#define MARK_WHITE 0
-#define MARK_GRAY  1
-#define MARK_BLACK 2
-
+// each type on the heap gets its own bucket
 typedef enum {
-    IDLE = 0, // standard gc state, nothing happening.
-    MARK,     // mark directly accessible objects (not necessary to go thru heap)
-    TRACE,    // starting from roots, follow their pointers to mark everything reachable. this could be one alloc, or a graph of multiple allocs.
-    PREPARE,  // pause the world. pause execution with a flag or call to gc_prepare, and set everything up to sweep (may not stick w this)
-    SWEEP,    // walk all heap objects, and free any unmarked objects. this will be done by checking a marked bit
-    RESUME,   // an "in between" between sweep and idle, allows the program to catch up and the gc to reset its state
+    HEAP_TYPE_I64 = 0,   // boxed i64s
+    HEAP_TYPE_U64,       // boxed u64s
+    HEAP_TYPE_DOUBLE,    // boxed doubles
+    HEAP_TYPE_FLOAT,     // boxed floats
+    HEAP_TYPE_STRING,    // strings (also gonna add stack strings, 8 chars can live in a register)
+    HEAP_TYPE_ARRAY,     // heap arrays (also gonna do stack arrays by calloc)
+    HEAP_TYPE_TABLE,     // hashtables
+    HEAP_TYPE_OBJECT,    // user-defined objects
 
-    // may add incremental/tri color gc
-    // PROCESS, (process gray objects)
-    // REMARK, (for mutations during mark)
+    // TODO: figure out how to make 128 bit ints stack allocated. then add heap for them later
+    // HEAP_TYPE_I128    // 128 bit integers
+    // HEAP_TYPE_U128    // 128 bit UNSIGNED ints
 
-    // look into weak refs. leave options open
-} GC_STATE;
+    HEAP_TYPE_COUNT      // placeholder so we know how many items in this enum
+} HeapType;
 
-// forward declare GC and object header, cuz im unsure of what to do quite yet
-typedef struct FieldInfo FieldInfo;
-typedef struct MethodInfo MethodInfo;
 
-// rtti for types (one shared instance per type cuz otherwise i got to 48 bytes an instance...)
+// heap ref: (type << 24 | slot_index), this way one always knows the type without a deref
+typedef u32 HeapRef;
+
+// only invalid pointer sequence is all 1s
+#define HEAP_REF_NULL 0xFFFFFFFF
+
+// state
+typedef enum {
+    GC_IDLE = 0,   // nothing happening
+    GC_MARK,       // marking roots
+    GC_TRACE,      // tracing from roots
+    GC_SWEEP,      // sweeping unmarked
+} GCState;
+
+// bucketing (1 bucket to a type obviously)
 typedef struct {
-    const char *name;       // 4/8 byte ptr to type name
-    FieldInfo *fields;      // 4/8 byte ptr to field metadata array
-    MethodInfo *methods;    // 4/8 byte ptr to method metadata array
-    u16 type;               // 2 byte type id (added to registry)
-    u16 flags;              // 2 byte type flags (for compiler attributes like cloneable, builtin, and runtime attributes like abstract)
-    u16 parent;             // 2 byte parent type id (allows for ~65.5k classes)
-    u16 field_count;        // 2 byte field count (max 65536)
-    u16 method_count;       // 2 byte method count (max 65536)
-    u16 padding;            // 2 bytes for "idk what the fuck to do"
-} ObjInfo;                  // = 40 byte info per type (div by 8 valid)
+    u8*  data;          // raw memory block (slots)
+    u64* marks;         // 2 bits marking (00, 01, 10) per slot (32 per u64, then double)
+    u32  capacity;      // total slots allocated
+    u32  used;          // bump pointer (next free index)
+    u16  slot_size;     // bytes per slot
+    u8   type;          // HeapType enum
+    u8   generation;    // 0 = young, 1+ = old
+} Bucket;
 
-// rtti for individual fields (metadata only)
-typedef struct FieldInfo {
-    const char *name;       // 4/8 byte ptr to field name
-    u16 type;               // 2 byte for the type this field holds
-    u16 offset;             // 2 byte offset from objs start location
-    u16 flags;              // 2 bytes for field specific flags (readonly, etc idk)
-    u16 padding;            // 2 bytes for "idk what the fuck to do" again
-} FieldInfo;                // = 16 bytes (div by 8 valid)
 
-// rtti for methods (metadata only)
-typedef struct MethodInfo {
-    const char *name;       // 4/8 byte ptr to method name
-    void *func_ptr;         // 8 bytes - actual function pointer
-    u16 rtntype;            // 2 byte for the type this method returns
-    u16 argc;               // 2 byte argument count
-    u16 flags;              // 4 bytes - static, virtual, etc.
-} MethodInfo;               // = 24 bytes (div by 8 valid)
-
-// per-instance header (one per object)
-// stack objects die with frames, anything on the heap will be marked with a header (TODO figure out how to point to the object without using 24 fucking bytes)
-// heap has been hellish for me
-typedef struct ObjHeader {
-    ObjInfo *info;          // 8 bytes - points to shared type metadata
-    u32 size;               // 4 bytes - allocation size
-    u8  mark;               // 1 byte  - gc mark bits
-    u8  tid;                // 1 byte  - thread id
-    u8  state;              // 1 byte  - lock state
-    u8  generation;         // 1 byte  - gc generation
-} ObjHeader;                // = 16 bytes (one per INSTANCE, div by 8)
-
+// heap object types
 typedef struct {
-    // current alloc size
-    size_t allocated;
+    char* data;         // owned char array (null terminated)
+    u32   length;       // char count (excluding null)
+    u32   hash;         // cached hash (INTERNING YAY)
+} HeapString;
 
-    // all objects currently managed by the GC
-    ObjHeader *objs;
-    size_t objc;
-
-    // color management
-    ObjHeader **gray;
-    size_t graycount;
-    size_t graycap;
-    GC_STATE state;
-
-    // maybe a VM ref idk yet it's 2 am and i'm tired
-    // VM *vm;
-} GC;
-
-// builtin object types (god i understand why rust has 16 string types now. C ownership interoperability hard)
+// elements are raw u64 (type info stored elsewhere or untyped)
 typedef struct {
-    ObjHeader header;       // 16 bytes
-    size_t length;          // 8 byte char count
-    char data[];            // string OWNS the data (MIGHT MAKE BORROWED STRINGS TOO CIRCA RUST)
-} ObjString;
+    void* data;         // element storage
+    u32   length;       // current count
+    u32   capacity;     // allocated slots
+} HeapArray;
 
+// hashtable stub (TODO: either write a good table impl or use someone elses)
 typedef struct {
-    ObjHeader header;       // 16 bytes
-    size_t length;          // 8 bytes - item count
-    size_t capacity;        // 8 bytes - allocated capacity
-    void *data[];           // flexible array member
-} ObjArray;
+    void* buckets;      // references to each hash bucket (figure out a type and if this is a double)
+    u32   count;        // current count of entries
+    u32   capacity;     // total capacity (before a resize)
+} HeapTable;
 
-typedef struct ObjTable ObjTable;  // write a hashtable impl for this
+// user-defined, fields follow header
+typedef struct {
+    u16   type_id;      // type registry id
+    u16   field_count;  // number of fields
 
-/**
- * runs at program startup to initialize the gc
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- */
-bool gc_init(VM *vm, GC* gc);
+    // TODO: figure out how to keep a HeapRef to ALL FIELDS (so heap objects r only 64 bits)
+} HeapObject;
 
-/**
- * runs at program shutdown to stop and free the gc
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- */
-bool gc_free(VM *vm, GC* gc);
 
-/**
- * poll for a potential sweep by checking the allocation counter, marked objects, and then if necessary sweep
- * this will be light on the hot path but the actual sweep will probably be a little extensive
- * trying to decide on stop the world or concurrent
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- */
-bool gc_poll(VM *vm, GC* gc);
+// heap (like the entire heap)
+typedef struct {
+    Bucket* buckets;        // references to each bucket
+    u32     bucket_count;   // always HEAP_TYPE_COUNT
 
-/**
- * mark only the roots (lighter, and will be done often) i like the tri color model, where a lot of objects 
- * sit in gray space and then are sifted back into white/black so that may be what is used here.
- * tri color means roots are marked and potential grays are identified, and then the actual trace will be a sorting process. 
- * then when prepare is called, either the world is stopped or a thread is spawned
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- */
-bool gc_mark(VM *vm, GC* gc);
+    // state handling
+    GCState gc_state;
+    HeapRef* gray_stack;    // objects to trace
+    u32      gray_count;    // count on the gray stack
+    u32      gray_cap;      // count it can hold b4 a resize
 
-/**
- * do a full trace. on every root marked, go through and see what instances can be marked for collection
- * this will potentially contain a black/white/gray sort
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- */
-bool gc_trace(VM *vm, GC* gc);
+    // alloc tracking
+    size_t total_allocated; // total bytes allocated
+    size_t gc_threshold;    // sweep when we reach this, then 1.5-2x it
+} Heap;
 
-/**
- * sweep every item marked for collection
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- */
-bool gc_sweep(VM *vm, GC* gc);
+// bucket api
+bool  bucket_init(Bucket* b, u8 type, u16 slot_size, u32 initial_capacity);
+void  bucket_free(Bucket* b);
+bool  bucket_grow(Bucket* b);
 
-/**
- * allocate a header to the gc, used for tracking an object 
- * @param vm the instance of the vm to check
- * @param gc the gc to check it with
- * @return true if successfully allocated, false if not (error)
- * TODO: decide on how to pack all this into a 64 bit val
- */
-bool gc_alloc(VM *vm, GC* gc);
+void* bucket_alloc(Bucket* b);
+void* bucket_get(Bucket* b, u32 index);
+void  bucket_clear_marks(Bucket* b); // mark all items in a bucket as white
 
-// assorted root shit that i CBA to doc rn
-void gc_add_root(GC *gc, ObjHeader *obj);
-void gc_remove_root(GC *gc, ObjHeader *obj);
+// heap api
+bool     heap_init(Heap* h);
+void     heap_free(Heap* h);
 
-// and sweep threshold too (TODO look into potentially capping, tho may not cuz execution stalls...)
-bool gc_at_threshold(GC *gc);
-void gc_adjust_threshold(GC *gc);
+HeapRef  heap_alloc(Heap* h, HeapType type);
+void*    heap_deref(Heap* h, HeapRef ref);
+HeapType heap_ref_type(HeapRef ref);
 
-// gonna throw these inside GC but this is color management
-// gets the bottom 2 bits to check 0-3 mark (0 means white, 1 means gray, 2 means black, 3 means huh)
-static inline u8 gc_get_color(ObjHeader *obj) {
-    return obj->mark & 0x03;
+// easy allocation helpers
+HeapRef heap_alloc_string(Heap* h, const char* str, u32 len);
+HeapRef heap_alloc_array(Heap* h, u32 capacity);
+
+// gc api
+// mark a reference by color
+static inline void heap_set_color(Heap* h, HeapRef ref, u8 color) {
+    if (!h || ref == HEAP_REF_NULL) return;
+
+    u8 type = heapref_type(ref);
+    u32 slot = heapref_slot(ref);
+    if (type >= h->bucket_count) return;
+
+    Bucket* b = &h->buckets[type];
+    if (slot >= b->used) return;
+
+    // w = which word we want, off = its offset
+    u32 w = slot / 32, off = (slot % 32) * 2;
+    b->marks[w] = (b->marks[w] & ~(0x3ULL << off))  // clear the old 2 bits
+     | ((u64)(color & 0x3) << off);                 // write the new 2 bits
 }
 
-// sets the mark provided 0-2 (3 is just gonna be unused idk what it'd be for)
-static inline void gc_set_color(ObjHeader *obj, u8 color) {
-    obj->mark = (obj->mark & 0xFC) | color; // assuming color already masked
+// get current color of a reference
+static inline u8 heap_get_color(Heap* h, HeapRef ref) {
+    if (!h || ref == HEAP_REF_NULL) return MARK_WHITE;
+
+    u8 type = heapref_type(ref);
+    u32 slot = heapref_slot(ref);
+    if (type >= h->bucket_count) return MARK_WHITE;
+
+    Bucket* b = &h->buckets[type];
+    if (slot >= b->used) return MARK_WHITE;
+    return (b->marks[slot / 32] >> // pick the correct slot
+        ((slot % 32) * 2)) & 0x3;  // move to bottom and keep bottom 2 bits
+}
+
+static inline void heap_mark_gray(Heap* h, HeapRef ref) {
+    if (!h || ref == HEAP_REF_NULL || heap_get_color(h, ref) != MARK_WHITE) return;
+
+    // mark first
+    heap_set_color(h, ref, MARK_GRAY);
+    if (h->gray_count >= h->gray_cap) {
+        // first resize is 64
+        u32 new_cap = h->gray_cap ? h->gray_cap * 2 : 64;
+        
+        // confirm reallocation worked (gonna make the vm panic if it didnt)
+        HeapRef* ns = (HeapRef*)realloc(h->gray_stack, new_cap * sizeof(HeapRef));
+        if (!ns) return;
+
+        h->gray_stack = ns;
+        h->gray_cap = new_cap;
+    }
+
+    // then add to gray stack if we can
+    h->gray_stack[h->gray_count++] = ref;
+}
+
+// mark all items white (start of gc cycle)
+static inline void heap_clear_marks(Heap* h) {
+    if (!h) return;
+
+    for (u32 i = 0; i < h->bucket_count; i++) 
+        bucket_clear_marks(&h->buckets[i]);
+}
+
+// if above threshold return true
+static inline bool heap_should_gc(Heap* h) {
+    return h && h->total_allocated >= h->gc_threshold;
+}
+
+void heap_trace(Heap* h);
+void heap_sweep(Heap* h);
+
+
+// some helpers
+// pull type from a HeapRef
+static inline u8 heapref_type(HeapRef ref) {
+    return (ref >> 24) & 0xFF;
+}
+
+// pull slot index from a HeapRef (type is in slot 1)
+static inline u32 heapref_slot(HeapRef ref) {
+    return ref & 0x00FFFFFF;
+}
+
+// pack a HeapRef (type in byte 1 then the rest in the low 3 bytes)
+static inline HeapRef heapref_make(u8 type, u32 slot) {
+    return ((u32)type << 24) | (slot & 0x00FFFFFF);
 }
 
 #endif

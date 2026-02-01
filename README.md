@@ -279,17 +279,19 @@ I hope this creates for an interesting (and original) concept that gives you the
 - [x] Python test generator + runner (just a QOL thing, don't wanna manually run >5 tests)
 - [x] Function calls (instead they're loaded at preruntime)
 - [x] CALL/RET tests (comes with the above)
+- [X] Type conversion ops (I2D, I2F, D2I, F2I)
+- [X] TCO and the TAILCALL opcode (force/rewrite where you can)
 
 ### 🔨 Immediate
 - [ ] Make arithmetic operations work with any numeric type (avoid the need for unsigned operators) [DOUBLE CHECK THIS]
-- [ ] TCO and the TAILCALL opcode (force it where you can)
 - [ ] Unsigned ops (DIVU, MODU, GTU, GEU, LTU, LEU)
+- [ ] Figure out how to do stack strings/arrays. You can do this using 4 chars per register
 
 ### 🎯 High Priority
 - [ ] Frontend compiler (Stick language → bytecode, handwriting a parser rn)
 - [ ] Native function registration API (relatively simple)
 - [ ] Float/double arithmetic support (fixed at u64 and i64 just for rn)
-- [ ] Type conversion ops (I2D, I2F, D2I, F2I)
+
 
 ### 🧱 Core Features
 - [ ] Heap allocation (NEWARR, NEWTABLE, NEWOBJ)
