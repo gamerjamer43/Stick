@@ -25,7 +25,15 @@
 // default initial capacity per bucket
 #define DEFAULT_BUCKET_CAP 64
 
+// only invalid pointer sequence is all 1s
+#define HEAP_REF_NULL 0xFFFFFFFF
+
+// 24 bit slot limit cuz we need 8 bits for the type
+#define HEAP_MAX_SLOTS 0x00FFFFFF
+
 // each type on the heap gets its own bucket
+// TODO: figure out if we should seperate heap arrays and stack arrays (where primitives almost always go on stack)
+// or if those can go on heap too and we should just use the Type enum
 typedef enum {
     HEAP_TYPE_I64 = 0,   // boxed i64s
     HEAP_TYPE_U64,       // boxed u64s
@@ -47,8 +55,21 @@ typedef enum {
 // heap ref: (type << 24 | slot_index), this way one always knows the type without a deref
 typedef u32 HeapRef;
 
-// only invalid pointer sequence is all 1s
-#define HEAP_REF_NULL 0xFFFFFFFF
+// some helpers
+// pull type from a HeapRef
+static inline u8 heapref_type(HeapRef ref) {
+    return (ref >> 24) & 0xFF;
+}
+
+// pull slot index from a HeapRef (type is in slot 1)
+static inline u32 heapref_slot(HeapRef ref) {
+    return ref & 0x00FFFFFF;
+}
+
+// pack a HeapRef (type in byte 1 then the rest in the low 3 bytes)
+static inline HeapRef heapref_make(u8 type, u32 slot) {
+    return ((u32)type << 24) | (slot & 0x00FFFFFF);
+}
 
 // state
 typedef enum {
@@ -77,11 +98,13 @@ typedef struct {
     u32   hash;         // cached hash (INTERNING YAY)
 } HeapString;
 
-// elements are raw u64 (type info stored elsewhere or untyped)
+// typed fixed-capacity array
 typedef struct {
     void* data;         // element storage
-    u32   length;       // current count
-    u32   capacity;     // allocated slots
+    u32   length;       // current element count
+    u32   capacity;     // max elements (fixed at creation)
+    u16   elem_size;    // cached element size in bytes
+    u8    elem_type;    // element type (Type enum: I64, U64, FLOAT, DOUBLE, OBJ, etc.)
 } HeapArray;
 
 // hashtable stub (TODO: either write a good table impl or use someone elses)
@@ -106,7 +129,7 @@ typedef struct {
     u32     bucket_count;   // always HEAP_TYPE_COUNT
 
     // state handling
-    GCState gc_state;
+    GCState  gc_state;
     HeapRef* gray_stack;    // objects to trace
     u32      gray_count;    // count on the gray stack
     u32      gray_cap;      // count it can hold b4 a resize
@@ -131,23 +154,33 @@ void     heap_free(Heap* h);
 
 HeapRef  heap_alloc(Heap* h, HeapType type);
 void*    heap_deref(Heap* h, HeapRef ref);
-HeapType heap_ref_type(HeapRef ref);
 
 // easy allocation helpers
 HeapRef heap_alloc_string(Heap* h, const char* str, u32 len);
-HeapRef heap_alloc_array(Heap* h, u32 capacity);
+HeapRef heap_alloc_array(Heap* h, u8 elem_type, u32 capacity);
 
 // gc api
+// validate heapref before trusting
+static inline bool heapref_is_valid(Heap* h, HeapRef ref) {
+    if (!h || ref == HEAP_REF_NULL) return false;
+
+    // fit to a bucket
+    u8 type = heapref_type(ref);
+    if (type >= h->bucket_count) return false;
+    Bucket* b = &h->buckets[type];
+    if (!b->data || !b->marks) return false;
+
+    // check if there's room
+    return heapref_slot(ref) < b->used;
+}
+
 // mark a reference by color
 static inline void heap_set_color(Heap* h, HeapRef ref, u8 color) {
-    if (!h || ref == HEAP_REF_NULL) return;
+    if (!heapref_is_valid(h, ref)) return;
 
     u8 type = heapref_type(ref);
     u32 slot = heapref_slot(ref);
-    if (type >= h->bucket_count) return;
-
     Bucket* b = &h->buckets[type];
-    if (slot >= b->used) return;
 
     // w = which word we want, off = its offset
     u32 w = slot / 32, off = (slot % 32) * 2;
@@ -157,36 +190,38 @@ static inline void heap_set_color(Heap* h, HeapRef ref, u8 color) {
 
 // get current color of a reference
 static inline u8 heap_get_color(Heap* h, HeapRef ref) {
-    if (!h || ref == HEAP_REF_NULL) return MARK_WHITE;
+    if (!heapref_is_valid(h, ref)) return MARK_WHITE;
 
     u8 type = heapref_type(ref);
     u32 slot = heapref_slot(ref);
-    if (type >= h->bucket_count) return MARK_WHITE;
-
     Bucket* b = &h->buckets[type];
-    if (slot >= b->used) return MARK_WHITE;
+
     return (b->marks[slot / 32] >> // pick the correct slot
         ((slot % 32) * 2)) & 0x3;  // move to bottom and keep bottom 2 bits
 }
 
 static inline void heap_mark_gray(Heap* h, HeapRef ref) {
-    if (!h || ref == HEAP_REF_NULL || heap_get_color(h, ref) != MARK_WHITE) return;
+    // validate explicitly cuz no behavior is reliable
+    if (!heapref_is_valid(h, ref)) return;
+    if (heap_get_color(h, ref) != MARK_WHITE) return;
 
-    // mark first
-    heap_set_color(h, ref, MARK_GRAY);
+    // grow gray stack if needed
     if (h->gray_count >= h->gray_cap) {
-        // first resize is 64
         u32 new_cap = h->gray_cap ? h->gray_cap * 2 : 64;
-        
-        // confirm reallocation worked (gonna make the vm panic if it didnt)
         HeapRef* ns = (HeapRef*)realloc(h->gray_stack, new_cap * sizeof(HeapRef));
-        if (!ns) return;
+        if (!ns) {
+            // OOM during GC is fatal - can't maintain tri-color invariants
+            // TODO: make this panic the VM
+            fprintf(stderr, "FATAL: OOM in heap_mark_gray, aborting\n");
+            abort();
+        }
 
         h->gray_stack = ns;
         h->gray_cap = new_cap;
     }
 
-    // then add to gray stack if we can
+    // mark gray and push (order matters: mark before push)
+    heap_set_color(h, ref, MARK_GRAY);
     h->gray_stack[h->gray_count++] = ref;
 }
 
@@ -198,6 +233,15 @@ static inline void heap_clear_marks(Heap* h) {
         bucket_clear_marks(&h->buckets[i]);
 }
 
+// begin a new GC cycle (resets per-cycle state)
+static inline void heap_begin_gc(Heap* h) {
+    if (!h) return;
+    heap_clear_marks(h);
+    
+    h->gray_count = 0;
+    h->gc_state = GC_MARK;
+}
+
 // if above threshold return true
 static inline bool heap_should_gc(Heap* h) {
     return h && h->total_allocated >= h->gc_threshold;
@@ -205,22 +249,5 @@ static inline bool heap_should_gc(Heap* h) {
 
 void heap_trace(Heap* h);
 void heap_sweep(Heap* h);
-
-
-// some helpers
-// pull type from a HeapRef
-static inline u8 heapref_type(HeapRef ref) {
-    return (ref >> 24) & 0xFF;
-}
-
-// pull slot index from a HeapRef (type is in slot 1)
-static inline u32 heapref_slot(HeapRef ref) {
-    return ref & 0x00FFFFFF;
-}
-
-// pack a HeapRef (type in byte 1 then the rest in the low 3 bytes)
-static inline HeapRef heapref_make(u8 type, u32 slot) {
-    return ((u32)type << 24) | (slot & 0x00FFFFFF);
-}
 
 #endif

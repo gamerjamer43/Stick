@@ -16,6 +16,18 @@ static const u16 SLOT_SIZES[] = {
     [HEAP_TYPE_OBJECT] = sizeof(HeapObject),
 };
 
+// same but for primitives so we don't have to do force boxing
+static const u16 ELEM_SIZES[] = {
+    [NUL]      = 0,
+    [BOOL]     = sizeof(u8),
+    [U64]      = sizeof(u64),
+    [I64]      = sizeof(i64),
+    [FLOAT]    = sizeof(float),
+    [DOUBLE]   = sizeof(double),
+    [OBJ]      = sizeof(HeapRef),
+    [CALLABLE] = sizeof(HeapRef),
+};
+
 
 // bucket operations
 bool bucket_init(Bucket* b, u8 type, u16 slot_size, u32 cap) {
@@ -44,43 +56,53 @@ void bucket_free(Bucket* b) {
     if (!b) return;
 
     free(b->data);  
-    b->data = NULL;
-
     free(b->marks); 
-    b->marks = NULL;
 
-    b->capacity = b->used = 0;
+    // fully reset to prevent stale state bugs
+    memset(b, 0, sizeof(*b));
 }
 
 bool bucket_grow(Bucket* b) {
-    if (!b || !b->data) return false;
+    if (!b || !b->data || !b->marks) return false;
 
     // double
-    u32 new_cap = b->capacity * 2;
-    
-    // resize slots (and confirm)
-    u8* new_data = (u8*)realloc(b->data, new_cap * b->slot_size);
+    u32 old_cap = b->capacity;
+
+    // should NEVER happen, but this check will exist for debugging purposes
+    if (old_cap == 0) return false;
+    u32 new_cap = old_cap * 2;
+
+    // resize slots (and confirm, calloc zeroes so no need)
+    size_t new_bytes = (size_t)new_cap * (size_t)b->slot_size;
+    u8* new_data = (u8*)calloc(1, new_bytes);
     if (!new_data) return false;
 
-    // zero out the new half of the bucket
-    memset(new_data + b->capacity * b->slot_size, 0, b->capacity * b->slot_size);
-    b->data = new_data;
-    
     // make space for new marks
-    u64* new_marks = (u64*)realloc(b->marks, ((new_cap + 31) / 32) * sizeof(u64));
-    if (!new_marks) return false;
+    u32 old_words = (old_cap + 31u) / 32u;
+    u32 new_words = (new_cap + 31u) / 32u;
+    u64* new_marks = (u64*)calloc((size_t)new_words, sizeof(u64));
+    if (!new_marks) {
+        free(new_data);
+        return false;
+    }
 
-    // zero those too
-    memset(new_marks + (b->capacity + 31) / 32, 0, 
-           (((new_cap + 31) / 32) - ((b->capacity + 31) / 32)) * sizeof(u64));
+    // copy old contents into the new buffers
+    memcpy(new_data, b->data, (size_t)old_cap * (size_t)b->slot_size);
+    memcpy(new_marks, b->marks, (size_t)old_words * sizeof(u64));
 
+    // commit
+    free(b->data);
+    free(b->marks);
+
+    b->data = new_data;
     b->marks = new_marks;
     b->capacity = new_cap;
     return true;
 }
 
+
 void* bucket_alloc(Bucket* b) {
-    if (!b) return NULL;
+    if (!b || !b->data) return NULL;
     if (b->used >= b->capacity && !bucket_grow(b)) return NULL;
 
     return b->data + (b->used++ * b->slot_size);
@@ -113,16 +135,13 @@ bool heap_init(Heap* h) {
     if (!h->buckets) return false;
 
     // bucket count is ALWAYS == HEAP_TYPE_COUNT
-    h->bucket_count = HEAP_TYPE_COUNT;
     for (u32 i = 0; i < HEAP_TYPE_COUNT; i++) {
-        // if init fails free every bucket
         if (!bucket_init(&h->buckets[i], (u8)i, SLOT_SIZES[i], DEFAULT_BUCKET_CAP)) {
-            for (u32 j = 0; j < i; j++) 
-                bucket_free(&h->buckets[j]);
-
-            free(h->buckets);
+            heap_free(h);
             return false;
         }
+        
+        h->bucket_count++;
     }
 
     // set starter threshold to 1kb (prolly will increase...)
@@ -130,11 +149,49 @@ bool heap_init(Heap* h) {
     return true;
 }
 
+// free inner allocations for a single slot (strings, arrays, tables, objects, whatevers innere)
+static void slot_destroy(Bucket* b, u32 idx) {
+    if (!b || !b->data || idx >= b->used) return;
+    void* slot = b->data + (idx * b->slot_size);
+
+    switch (b->type) {
+        case HEAP_TYPE_STRING: {
+            HeapString* s = (HeapString*)slot;
+            free(s->data);
+            s->data = NULL;
+            break;
+        }
+        case HEAP_TYPE_ARRAY: {
+            HeapArray* arr = (HeapArray*)slot;
+            free(arr->data);
+            arr->data = NULL;
+            break;
+        }
+        case HEAP_TYPE_TABLE: {
+            HeapTable* t = (HeapTable*)slot;
+            free(t->buckets);
+            t->buckets = NULL;
+            break;
+        }
+        case HEAP_TYPE_OBJECT: {
+            // TODO: implement object fields (and free safely)
+            break;
+        }
+
+        // primitives have no inner allocations
+        default: break;
+    }
+}
+
 void heap_free(Heap* h) {
     if (!h) return;
 
-    for (u32 i = 0; i < h->bucket_count; i++) 
-        bucket_free(&h->buckets[i]);
+    // free inner allocations for each used slot
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        for (u32 j = 0; j < b->used; j++) slot_destroy(b, j);
+        bucket_free(b);
+    }
 
     free(h->buckets);
     free(h->gray_stack);
@@ -147,6 +204,9 @@ HeapRef heap_alloc(Heap* h, HeapType type) {
     // slot in appropriate type bucket, slot == used (last index in the bucket)
     Bucket* b = &h->buckets[type];
     u32 slot = b->used;
+
+    // guard 24-bit slot limit (HeapRef can only encode 0x00FFFFFF slots)
+    if (slot >= HEAP_MAX_SLOTS) return HEAP_REF_NULL;
 
     // if allocation somehow fails (i would assume it'd likely be due to calloc)
     // return a null ref (which will error the runtime)
@@ -176,42 +236,65 @@ HeapType heapref_type_nc(HeapRef ref) {
 
 // allocate a string to the heap
 HeapRef heap_alloc_string(Heap* h, const char* str, u32 len) {
-    // allocate (and ensure it gives a ref)
+    if (!h || !str) return HEAP_REF_NULL;
+
+    // allocate string data before consuming
+    char* data = (char*)malloc(len + 1);
+    if (!data) return HEAP_REF_NULL;
+
+    // then copy
+    memcpy(data, str, len);
+    data[len] = '\0';
+
+    // and NOW allocate the slot
     HeapRef ref = heap_alloc(h, HEAP_TYPE_STRING);
-    if (ref == HEAP_REF_NULL) return ref;
+    if (ref == HEAP_REF_NULL) {
+        free(data);
+        return HEAP_REF_NULL;
+    }
 
     // then safely deref
     HeapString* s = (HeapString*)heap_deref(h, ref);
-    s->data = (char*)malloc(len + 1);
-    if (!s->data) return HEAP_REF_NULL;
-
-    // and fill
-    memcpy(s->data, str, len);
-    s->data[len] = '\0';
+    s->data = data;
     s->length = len;
     s->hash = 0;
 
-    // bump and return reference
+    // bump
     h->total_allocated += len + 1;
     return ref;
 }
 
-// allocate an array to the heap (bytecode verifier will ensure no bounds errors)
-// TODO: unfix this from u64
-HeapRef heap_alloc_array(Heap* h, u32 cap) {
+// allocate a typed (from the Type enum), fixed-capacity array to the heap
+HeapRef heap_alloc_array(Heap* h, u8 elem_type, u32 cap) {
+    // disallow NUL type arrays (elem_size == 0 is undefined behavior with calloc)
+    if (!h || elem_type == NUL || elem_type > CALLABLE) return HEAP_REF_NULL;
+
+    u16 elem_size = ELEM_SIZES[elem_type];
+
+    // allocate backing buffer first
+    void* data = NULL;
+    if (cap > 0) {
+        data = calloc(cap, elem_size);
+        if (!data) return HEAP_REF_NULL;
+    }
+
+    // then allocate the slot (to avoid a leak)
     HeapRef ref = heap_alloc(h, HEAP_TYPE_ARRAY);
-    if (ref == HEAP_REF_NULL) return ref;
+    if (ref == HEAP_REF_NULL) {
+        free(data);
+        return HEAP_REF_NULL;
+    }
 
-    // allocate and ensure it worked
+    // deref and fill
     HeapArray* arr = (HeapArray*)heap_deref(h, ref);
-    arr->data = cap ? calloc(cap, sizeof(u64)) : NULL;
-    if (cap && !arr->data) return HEAP_REF_NULL;
-
-    // zero out new slots
+    arr->data = data;
     arr->length = 0;
     arr->capacity = cap;
-    h->total_allocated += cap * sizeof(u64);
+    arr->elem_size = elem_size;
+    arr->elem_type = (u8)elem_type;
 
+    // bump
+    h->total_allocated += cap * elem_size;
     return ref;
 }
 
