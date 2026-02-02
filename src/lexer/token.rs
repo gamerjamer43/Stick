@@ -18,6 +18,9 @@ pub enum Token<'src> {
     // newlines (also skipped but either that or a semicolon is forced to seperate statements)
     #[regex(r"\n")] Newline,
 
+    // file end delimiter (simplest way to fix this bs)
+    Eof,
+
     // equality and comparisons
     #[token("==")]  EqEq,
     #[token("!=")]  NotEq,

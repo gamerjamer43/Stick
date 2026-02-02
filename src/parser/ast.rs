@@ -196,6 +196,7 @@ pub enum AssignOp {
 /// box anything recursive, as otherwise the enum will be infinite, and rust needs
 /// to know the size at compile time.
 /// TODO: implement constant expressions (ConstExpr) which are evaluated down to a fixed integer value
+/// TODO 2: small but figure out how to avoid all that boxing. one option is using an arena but das kinda OD
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr<'src> {
     // var names
@@ -256,16 +257,25 @@ pub enum Expr<'src> {
         sub: Subscript<'src>,
     },
 
+    // a scoped block, used for any sort of "statement".
+    // stores the instructions inside and what it evaluates to (or none)
+    Block {
+        stmts: Vec<Stmt<'src>>,
+        tail: Option<Box<Expr<'src>>>,
+    },
+
     // control flow
     If {
         cond: Box<Expr<'src>>,
-        then: Vec<Stmt<'src>>,
-        else_: Option<Vec<Stmt<'src>>>,
+        then: Box<Expr<'src>>,
+
+        // another if can get fed into here
+        else_: Option<Box<Expr<'src>>>,
     },
 
     While {
         cond: Box<Expr<'src>>,
-        body: Box<Stmt<'src>>,
+        body: Option<Box<Expr<'src>>>,
     },
 
     Match {
@@ -303,6 +313,7 @@ pub enum Pattern<'src> {
         start: Option<Box<Expr<'src>>>,
         end: Option<Box<Expr<'src>>>,
     },
+
     // shit i have to add later
     // Tuple(Vec<Pattern<'src>>),
     // Array
@@ -339,7 +350,7 @@ pub enum Stmt<'src> {
         mutable: bool,
         constant: bool,
 
-        // global == static
+        // global == static will prolly change that
         global: bool,
     },
 }

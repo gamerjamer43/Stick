@@ -56,6 +56,10 @@ pub fn lex<'path, 'src>(
         };
     }
 
+    // add end of file
+    spans.push(src.len()..src.len());
+    tokens.push(Token::Eof);
+
     // handle debug prints
     println!(
         "Lexed {} bytes, {linecount} lines into {} tokens. Took {}s.",

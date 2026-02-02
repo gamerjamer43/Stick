@@ -36,6 +36,13 @@ impl<'src, 't> Parser<'src, 't> {
     }
 
     #[inline]
+    // i'm so smart. match any using a slice to reduce the amt of calls to self.matches
+    fn matches_any(&self, any: &[Token<'src>]) -> bool {
+        let tok: &Token<'_> = self.cur().unwrap_or(&Token::Error);
+        any.contains(tok)
+    }
+
+    #[inline]
     fn error(&mut self, err: SyntaxError<'src>) {
         let diag: Diagnostic<'_, '_> = Diagnostic {
             path: self.path,
@@ -131,8 +138,8 @@ impl<'src, 't> Parser<'src, 't> {
 
                             // malformed calls
                             if !self.matches(&Token::RParen) {
-                                panic!(
-                                    "expected ',' or ')' in call. have to add this to the error system"
+                                self.error(
+                                    SyntaxError::Parse(ParseError::MissingExpected("expected ',' or ')' in call. have to add this to the error system"))
                                 );
                             }
                         }
@@ -339,6 +346,152 @@ impl<'src, 't> Parser<'src, 't> {
         left
     }
 
+    fn parse_if_expr(&mut self) -> Expr<'src> {
+        // TODO replace the 2 expect calls with self.error this is the only way it was workin
+        let cond: Expr<'_> = self.parse_expr(0);
+        self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
+            .expect("missing '{' before if body");
+
+        // skip newlines after the block
+        let then: Expr<'_> = self.parse_block_expr();
+        while self.matches(&Token::Newline) {
+            self.advance();
+        }
+
+        // check for an else statement (and skip newlines between else if and els etoo)
+        let else_: Option<Box<Expr<'_>>> = if self.matches(&Token::Else) {
+            self.advance();
+            while self.matches(&Token::Newline) {
+                self.advance();
+            }
+
+            // recursively parse as an Else { If {} } we have an else if
+            if self.matches(&Token::If) {
+                self.advance();
+                Some(Box::new(self.parse_if_expr()))
+            } 
+
+            // otherwise make sure that brace is there (and then parse)
+            else {
+                self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
+                    .expect("missing '{' before else body");
+                Some(Box::new(self.parse_block_expr()))
+            }
+        } 
+        
+        // otherwise no else
+        else {
+            None
+        };
+
+        Expr::If {
+            cond: Box::new(cond),
+            then: Box::new(then),
+            else_,
+        }
+    }
+
+    fn parse_block_expr(&mut self) -> Expr<'src> {
+        let mut stmts: Vec<Stmt<'src>> = Vec::new();
+        let mut tail: Option<Box<Expr<'src>>> = None;
+
+        loop {
+            let tok = match self.cur() {
+                Some(t) => t,
+
+                // no closing } errors out
+                None => {
+                    self.error(SyntaxError::Parse(ParseError::MissingExpected(
+                        "expected '}' to close block",
+                    )));
+                    break;
+                }
+            };
+
+            match tok {
+                // break on right brace
+                Token::RBrace => {
+                    self.advance();
+                    break;
+                }
+
+                // pass newlines
+                Token::Newline => {
+                    self.advance();
+                    continue;
+                }
+
+                Token::Let => match self.parse_let() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
+                Token::Return => {
+                    self.advance();
+
+                    // return NONE
+                    if self.matches_any(&[Token::Newline, Token::Semicolon, Token::RBrace]) {
+                        stmts.push(Stmt::Return(None));
+                    } 
+                    
+                    // return an expression
+                    else {
+                        let expr = self.parse_expr(0);
+                        stmts.push(Stmt::Return(Some(expr)));
+                    }
+                }
+
+                Token::Break => {
+                    self.advance();
+                    stmts.push(Stmt::Break);
+                }
+
+                Token::Continue => {
+                    self.advance();
+                    stmts.push(Stmt::Continue);
+                }
+
+                // all statements matched, expect an expression
+                _ => {
+                    let expr = self.parse_expr(0);
+
+                    // skip newlines (this was fuckin up tails)
+                    while self.matches(&Token::Newline) {
+                        self.advance();
+                    }
+
+                    if self.matches(&Token::RBrace) {
+                        tail = Some(Box::new(expr));
+
+                        self.advance();
+                        break;
+                    }
+
+                    stmts.push(Stmt::Expr(expr));
+                }
+            }
+
+            // delimiter handling inside block
+            if self.matches_any(&[Token::Newline, Token::Semicolon]) {
+                while self.matches_any(&[Token::Newline, Token::Semicolon]) {
+                    self.advance();
+                }
+                continue;
+            }
+
+            if self.matches(&Token::RBrace) {
+                self.advance();
+                break;
+            }
+
+            self.error(SyntaxError::Parse(ParseError::MissingExpected(
+                "expected ';', newline, or '}' after statement in block",
+            )));
+        }
+
+        Expr::Block { stmts, tail }
+    }
+
     #[inline]
     fn parse_prefix(&mut self) -> Expr<'src> {
         // TODO: write proper error handling... and parse expr... and test this
@@ -371,18 +524,11 @@ impl<'src, 't> Parser<'src, 't> {
             Token::LitChar(c) => Expr::Literal(Literal::Char(c)),
             Token::Bool(b) => Expr::Literal(Literal::Bool(*b)),
 
-            Token::If => {
-                // self.advance();
-                // self.expect(|t: &Token<'_>| matches!(t, Token::LParen)).expect("missing '(' before start of condition");
-                // let cond: Expr<'_> = self.parse_expr(0);
-                // self.expect(|t: &Token<'_>| matches!(t, Token::RParen)).expect("missing ')'");
-                // Expr::If { cond: Box::new(cond), then: (), else_: () }
-                todo!("impl if statement")
-            }
+            Token::If => self.parse_if_expr(),
 
             // Token::While => self.parse_while_expr(),
             // Token::Match => self.parse_match_expr(),
-            // Token::LBrace => self.parse_block_expr(),
+            Token::LBrace => self.parse_block_expr(),
 
             // temporary solution for nimpl, i need to link ariadne
             _ => {
@@ -480,7 +626,7 @@ impl<'src, 't> Parser<'src, 't> {
             self.advance();
 
             match self.cur().unwrap_or(&Token::Error) {
-                Token::Error | Token::Newline | Token::Semicolon => {
+                Token::Error | Token::Newline | Token::Semicolon | Token::Eof => {
                     return Err(
                         SyntaxError::Parse(ParseError::MissingExpected(
                             "expected expression after '='",
@@ -530,14 +676,25 @@ impl<'src, 't> Parser<'src, 't> {
 
         while let Some(cur) = self.cur() {
             match cur {
-                // skip newlines
-                Token::Newline => {
+                // skip newlines (and eof its just handled by checking none)
+                Token::Newline | Token::Eof => {
                     self.advance();
                     continue;
                 }
 
-                // idents (read parse_ident)
-                Token::Identifier(_) => nodes.push(Stmt::Expr(self.parse_expr(0))),
+                // expression statements (idents, literals, blocks, if, and others)
+                Token::Identifier(_)
+                | Token::LitInteger(_)
+                | Token::LitFloat(_)
+                | Token::LitString(_)
+                | Token::LitChar(_)
+                | Token::Bool(_)
+                | Token::LParen
+                | Token::LBrace
+                | Token::If
+                | Token::Minus
+                | Token::LogicalNot
+                | Token::BitNot => nodes.push(Stmt::Expr(self.parse_expr(0))),
 
                 // TODO: see how we can break some of this down
                 Token::Let => match self.parse_let() {
@@ -564,7 +721,7 @@ impl<'src, 't> Parser<'src, 't> {
             }
 
             // TODO: make the compiler warn on unnecessary semicolon
-            if !(self.matches(&Token::Newline) || self.matches(&Token::Semicolon)) {
+            if !(self.matches_any(&[Token::Newline, Token::Semicolon, Token::Eof, Token::LBrace])) {
                 self.error(
                     SyntaxError::Parse(ParseError::MissingExpected(
                         "all statements must be followed by either a newline or semicolon",

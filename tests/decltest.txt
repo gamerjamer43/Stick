@@ -1,4 +1,5 @@
-// keeping these 
+// keeping these seperate due to clutter
+
 // declarations with a value
 let typed: i32 = 5
 let underscored: _ = 5

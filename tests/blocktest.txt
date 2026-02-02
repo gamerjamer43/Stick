@@ -1,0 +1,10 @@
+// statmements and blocks
+
+let five: i32 = {
+    let value: i32 = 5
+    value
+}
+
+if five == 5 {
+    writeln("testing templating: {value}")
+}
