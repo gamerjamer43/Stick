@@ -279,7 +279,7 @@ pub enum Expr<'src> {
 
     While {
         cond: Box<Expr<'src>>,
-        body: Option<Box<Expr<'src>>>,
+        body: Box<Expr<'src>>,
     },
 
     Match {
@@ -317,7 +317,6 @@ pub enum Pattern<'src> {
         start: Option<Box<Expr<'src>>>,
         end: Option<Box<Expr<'src>>>,
     },
-
     // shit i have to add later
     // Tuple(Vec<Pattern<'src>>),
     // Array

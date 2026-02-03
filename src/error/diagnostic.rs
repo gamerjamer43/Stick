@@ -52,7 +52,7 @@ impl<'src> SyntaxError<'src> {
                         "the right hand of an equals sign cannot be blank"
                     }
                     // else if msg.starts_with("message start") {
-                    //     "the right hand of an equals sign cannot be blank"
+                    //     "special hint wao"
                     // }
                     else {
                         "Unknown"

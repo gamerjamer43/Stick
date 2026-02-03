@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables)]
 
 use core::fmt;
-use std::{ops::Range, process::exit, time::Instant, mem::take};
+use std::{mem::take, ops::Range, process::exit, time::Instant};
 
 use super::ast::*;
 use crate::error::{Diagnostic, ParseError, SyntaxError};
@@ -15,7 +15,7 @@ pub struct Parser<'src, 't> {
     pub spans: &'t [Range<usize>],
     pub pos: usize,
     pub fastfail: bool,
-    pub errors: Vec<Diagnostic<'t, 'src>>
+    pub errors: Vec<Diagnostic<'t, 'src>>,
 }
 
 impl<'src, 't> Parser<'src, 't> {
@@ -109,9 +109,13 @@ impl<'src, 't> Parser<'src, 't> {
 
             // indexing/fields r highest precedence
             let precedence: u8 = match tok {
-                Token::LParen | Token::LBracket | Token::Dot | 
-                Token::Arrow | Token::PlusPlus | Token::MinusMinus => 15,
-                
+                Token::LParen
+                | Token::LBracket
+                | Token::Dot
+                | Token::Arrow
+                | Token::PlusPlus
+                | Token::MinusMinus => 15,
+
                 _ => 0,
             };
 
@@ -390,16 +394,14 @@ impl<'src, 't> Parser<'src, 't> {
             if self.matches(&Token::If) {
                 self.advance();
                 Some(Box::new(self.parse_if_expr()))
-            } 
-
+            }
             // otherwise make sure that brace is there (and then parse)
             else {
                 self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
                     .expect("missing '{' before else body");
                 Some(Box::new(self.parse_block_expr()))
             }
-        } 
-        
+        }
         // otherwise no else
         else {
             self.pos = checkpoint;
@@ -413,8 +415,18 @@ impl<'src, 't> Parser<'src, 't> {
         }
     }
 
+    // TODO replace any .expect("msg") calls with self.error. this is the only way it was workin frn
     fn parse_while_expr(&mut self) -> Expr<'src> {
-        todo!("gabagool")
+        let cond: Expr<'_> = self.parse_expr(0);
+        self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
+            .expect("missing '{' before while body");
+
+        let body: Expr<'_> = self.parse_block_expr();
+
+        Expr::While {
+            cond: Box::new(cond),
+            body: Box::new(body),
+        }
     }
 
     fn parse_match_expr(&mut self) -> Expr<'src> {
@@ -462,8 +474,7 @@ impl<'src, 't> Parser<'src, 't> {
                     // return NONE
                     if self.matches_any(&[Token::Newline, Token::Semicolon, Token::RBrace]) {
                         stmts.push(Stmt::Return(None));
-                    } 
-                    
+                    }
                     // return an expression
                     else {
                         let expr = self.parse_expr(0);
@@ -564,9 +575,9 @@ impl<'src, 't> Parser<'src, 't> {
             Token::Bool(b) => Expr::Literal(Literal::Bool(*b)),
 
             Token::If => self.parse_if_expr(),
+            Token::While => self.parse_while_expr(),
+            Token::Match => self.parse_match_expr(),
 
-            // Token::While => self.parse_while_expr(),
-            // Token::Match => self.parse_match_expr(),
             Token::LBrace => self.parse_block_expr(),
 
             // temporary solution for nimpl, i need to link ariadne
@@ -587,29 +598,24 @@ impl<'src, 't> Parser<'src, 't> {
 
         // ensure constant isnt used where it can't be
         if constant && mutable {
-            self.error(
-                SyntaxError::Parse(ParseError::ConstDisallowed(
-                    "constant cannot be used in tandem with mutable.",
-                )),
-            );
+            self.error(SyntaxError::Parse(ParseError::ConstDisallowed(
+                "constant cannot be used in tandem with mutable.",
+            )));
         }
         if constant && global {
-            self.error(
-                SyntaxError::Parse(ParseError::ConstDisallowed(
-                    "constant cannot be used in tandem with static.",
-                )),
-            );
+            self.error(SyntaxError::Parse(ParseError::ConstDisallowed(
+                "constant cannot be used in tandem with static.",
+            )));
         }
 
         // consume name (TODO: add let _)
         let name: Ident<'_> = match self.expect(|t| matches!(t, Token::Identifier(_))) {
             Some(Token::Identifier(name)) => Ident(name),
             _ => {
-                return Err(
-                    SyntaxError::Parse(ParseError::MissingExpected(
-                        "let must have an identifier afterwards",
-                    ))
-                )
+                return Err(SyntaxError::Parse(ParseError::MissingExpected(
+                    "let must have an identifier afterwards",
+                )));
+
                 // continue;
             }
         };
@@ -619,9 +625,9 @@ impl<'src, 't> Parser<'src, 't> {
             self.advance();
 
             // TODO: add support for array and generic types
-            match self.expect(|t| {
-                matches!(t, Token::Identifier(_) | Token::Unit | Token::Underscore)
-            }) {
+            match self
+                .expect(|t| matches!(t, Token::Identifier(_) | Token::Unit | Token::Underscore))
+            {
                 Some(Token::Identifier(typname)) => match *typname {
                     "i8" => Type::I8,
                     "u8" => Type::U8,
@@ -645,15 +651,12 @@ impl<'src, 't> Parser<'src, 't> {
 
                 // push missing type after :
                 _ => {
-                    return Err(
-                        SyntaxError::Parse(ParseError::MissingExpected(
-                            "expected type name after ':'",
-                        )),
-                    );
+                    return Err(SyntaxError::Parse(ParseError::MissingExpected(
+                        "expected type name after ':'",
+                    )));
                 }
             }
         }
-
         // (if no annotation the type is inferred by the compiler)
         else {
             Type::Inferred
@@ -666,11 +669,9 @@ impl<'src, 't> Parser<'src, 't> {
 
             match self.cur().unwrap_or(&Token::Error) {
                 Token::Error | Token::Newline | Token::Semicolon | Token::Eof => {
-                    return Err(
-                        SyntaxError::Parse(ParseError::MissingExpected(
-                            "expected expression after '='",
-                        )),
-                    );
+                    return Err(SyntaxError::Parse(ParseError::MissingExpected(
+                        "expected expression after '='",
+                    )));
                 }
 
                 _ => {
@@ -681,24 +682,20 @@ impl<'src, 't> Parser<'src, 't> {
 
         // can't automatically deduce type on assignment (maybe make it so that the type is filled when assigned to?)
         if typ == Type::Inferred && init.is_none() {
-            return Err(
-                SyntaxError::Parse(ParseError::MissingExpected(
-                    "type cannot be inferred without a right hand side",
-                )),
-            );
+            return Err(SyntaxError::Parse(ParseError::MissingExpected(
+                "type cannot be inferred without a right hand side",
+            )));
         }
 
         // we did it!!!!
-        Ok(
-            Stmt::VarDecl {
-                name,
-                typ,
-                init,
-                mutable,
-                constant,
-                global,
-            }
-        )
+        Ok(Stmt::VarDecl {
+            name,
+            typ,
+            init,
+            mutable,
+            constant,
+            global,
+        })
     }
 
     pub fn parse(&mut self, flags: &[bool]) -> Result<Vec<Stmt<'src>>, Vec<Diagnostic<'t, 'src>>> {
@@ -731,6 +728,7 @@ impl<'src, 't> Parser<'src, 't> {
                 | Token::LParen
                 | Token::LBrace
                 | Token::If
+                | Token::While
                 | Token::Minus
                 | Token::PlusPlus
                 | Token::MinusMinus
@@ -741,7 +739,7 @@ impl<'src, 't> Parser<'src, 't> {
                 Token::Let => match self.parse_let() {
                     Ok(stmt) => nodes.push(stmt),
                     Err(e) => self.error(e),
-                }
+                },
 
                 // control flow: this dont seem right but...
                 // Token::Break => nodes.push(Stmt::Break),
@@ -763,11 +761,9 @@ impl<'src, 't> Parser<'src, 't> {
 
             // TODO: make the compiler warn on unnecessary semicolon
             if !(self.matches_any(&[Token::Newline, Token::Semicolon, Token::Eof, Token::LBrace])) {
-                self.error(
-                    SyntaxError::Parse(ParseError::MissingExpected(
-                        "all statements must be followed by either a newline or semicolon",
-                    )),
-                );
+                self.error(SyntaxError::Parse(ParseError::MissingExpected(
+                    "all statements must be followed by either a newline or semicolon",
+                )));
                 continue;
             }
 

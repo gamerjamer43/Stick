@@ -47,7 +47,7 @@ pub enum ParseError<'src> {
 pub enum SyntaxError<'src> {
     Lex(LexError<'src>),
     Parse(ParseError<'src>),
-    
+
     #[default]
     Unknown,
 }
@@ -79,12 +79,14 @@ impl Display for SyntaxError<'_> {
                 use ParseError::*;
                 match &pe {
                     MissingExpected(s) => write!(f, "missing a value where expected, {s}"),
-                    ConstDisallowed(s) => write!(f, "const cannot be used with some modifiers: {s}"),
+                    ConstDisallowed(s) =>  write!(f, "const cannot be used with some modifiers: {s}"),
                 }
             }
 
             // catchall == unknown
-            SyntaxError::Unknown => write!(f, "TODO: add context to unknown errors. this is going to be exhaustive but in the event we don't match..."),
+            SyntaxError::Unknown => write!(
+                f, "TODO: add context to unknown errors. this is going to be exhaustive but in the event we don't match..."
+            ),
         }
     }
 }
