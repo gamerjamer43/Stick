@@ -7,4 +7,19 @@ let five: i32 = {
 
 if five == 5 {
     writeln("testing templating: {value}")
+
+    // add one
+    ++five
+
+    // this error gonna be special
+    // ++five++ gonna say: what the fuck are you thinking just add two
+    five++
+
 }
+
+writeln("fuck")
+five++
+++five
+
+
+// else if and others next

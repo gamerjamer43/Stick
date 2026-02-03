@@ -55,6 +55,10 @@ pub enum Token<'src> {
     #[token("...")] Elipses,
     #[token("..")]  DotDot,
 
+    // unary arithmetic 
+    #[token("++")]  PlusPlus,
+    #[token("--")]  MinusMinus,
+
     // arithmetic
     #[token("**")]  StarStar,
     #[token("+")]   Plus,

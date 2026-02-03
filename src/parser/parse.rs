@@ -109,7 +109,9 @@ impl<'src, 't> Parser<'src, 't> {
 
             // indexing/fields r highest precedence
             let precedence: u8 = match tok {
-                Token::LParen | Token::LBracket | Token::Dot | Token::Arrow => 15,
+                Token::LParen | Token::LBracket | Token::Dot | 
+                Token::Arrow | Token::PlusPlus | Token::MinusMinus => 15,
+                
                 _ => 0,
             };
 
@@ -233,6 +235,23 @@ impl<'src, 't> Parser<'src, 't> {
                         left = Expr::Index { obj: lvalue, sub };
                     }
 
+                    // postfix increment/decrement
+                    Token::PlusPlus => {
+                        self.advance();
+                        left = Expr::Unary {
+                            op: UnaryOp::PostInc,
+                            expr: Box::new(left),
+                        };
+                    }
+
+                    Token::MinusMinus => {
+                        self.advance();
+                        left = Expr::Unary {
+                            op: UnaryOp::PostDec,
+                            expr: Box::new(left),
+                        };
+                    }
+
                     // never hits if this hits ur dumb
                     _ => unreachable!("how. this is in parse expr as part of the indexing/slicing"),
                 }
@@ -352,13 +371,15 @@ impl<'src, 't> Parser<'src, 't> {
         self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
             .expect("missing '{' before if body");
 
-        // skip newlines after the block
         let then: Expr<'_> = self.parse_block_expr();
+
+        // ONLY eat newlines when there's an else clause, otherwise the parser needs it as a delimiter
+        let checkpoint: usize = self.pos;
         while self.matches(&Token::Newline) {
             self.advance();
         }
 
-        // check for an else statement (and skip newlines between else if and els etoo)
+        // check for an else statement, and skip present newlines
         let else_: Option<Box<Expr<'_>>> = if self.matches(&Token::Else) {
             self.advance();
             while self.matches(&Token::Newline) {
@@ -381,6 +402,7 @@ impl<'src, 't> Parser<'src, 't> {
         
         // otherwise no else
         else {
+            self.pos = checkpoint;
             None
         };
 
@@ -389,6 +411,14 @@ impl<'src, 't> Parser<'src, 't> {
             then: Box::new(then),
             else_,
         }
+    }
+
+    fn parse_while_expr(&mut self) -> Expr<'src> {
+        todo!("gabagool")
+    }
+
+    fn parse_match_expr(&mut self) -> Expr<'src> {
+        todo!("gabagool")
     }
 
     fn parse_block_expr(&mut self) -> Expr<'src> {
@@ -468,6 +498,7 @@ impl<'src, 't> Parser<'src, 't> {
                     }
 
                     stmts.push(Stmt::Expr(expr));
+                    continue;
                 }
             }
 
@@ -499,6 +530,14 @@ impl<'src, 't> Parser<'src, 't> {
         match tok {
             Token::Minus => Expr::Unary {
                 op: UnaryOp::Neg,
+                expr: Box::new(self.parse_expr(12)),
+            },
+            Token::MinusMinus => Expr::Unary {
+                op: UnaryOp::PreDec,
+                expr: Box::new(self.parse_expr(12)),
+            },
+            Token::PlusPlus => Expr::Unary {
+                op: UnaryOp::PreInc,
                 expr: Box::new(self.parse_expr(12)),
             },
             Token::LogicalNot => Expr::Unary {
@@ -693,6 +732,8 @@ impl<'src, 't> Parser<'src, 't> {
                 | Token::LBrace
                 | Token::If
                 | Token::Minus
+                | Token::PlusPlus
+                | Token::MinusMinus
                 | Token::LogicalNot
                 | Token::BitNot => nodes.push(Stmt::Expr(self.parse_expr(0))),
 

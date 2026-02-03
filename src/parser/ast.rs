@@ -166,6 +166,10 @@ pub enum BinOp {
 /// and the 3 unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
+    PreInc,
+    PreDec,
+    PostInc,
+    PostDec,
     Neg,
     Not,
     BitNot,
