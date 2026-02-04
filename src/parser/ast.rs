@@ -289,9 +289,15 @@ pub enum Expr<'src> {
 
     // name for enhanced for loops, will just be iter if not
     For {
-        name: &'src str,
+        pattern: Pattern<'src>,
         iter: Box<Expr<'src>>,
-        body: Box<Stmt<'src>>,
+        body: Box<Expr<'src>>,
+    },
+
+    // standalone range expressions (0..5, ..5, 0..)
+    Range {
+        start: Option<Box<Expr<'src>>>,
+        end: Option<Box<Expr<'src>>>,
     },
 
     Unknown,
@@ -317,8 +323,10 @@ pub enum Pattern<'src> {
         start: Option<Box<Expr<'src>>>,
         end: Option<Box<Expr<'src>>>,
     },
+
+    // tuples (i, j)
+    Tuple(Vec<Pattern<'src>>),
     // shit i have to add later
-    // Tuple(Vec<Pattern<'src>>),
     // Array
     //
     // will prolly expand but for rn this is ok

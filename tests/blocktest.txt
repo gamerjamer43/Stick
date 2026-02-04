@@ -1,10 +1,5 @@
 // statmements and blocks
 
-let five: i32 = {
-    let value: i32 = 5
-    value
-}
-
 if five == 5 {
     writeln("well fucking obviously {five} == 5")
 
@@ -15,6 +10,24 @@ if five == 5 {
     five--
 }
 
+else if five == 6 {
+    writeln("erm")
+}
+
+else {
+    writeln("hey")
+}
+
+// standard for loops r rust style
+for i in 0..5 {
+
+}
+
+// enhanced for loops work too!
+for i in expr {
+
+}
+
 while five == 5 {
     five++
 }
@@ -23,4 +36,4 @@ while five == 5 {
 writeln("fuck")
 
 
-// else if and others next
+// TODO: match statements

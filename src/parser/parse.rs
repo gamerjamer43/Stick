@@ -323,6 +323,24 @@ impl<'src, 't> Parser<'src, 't> {
                 // E
                 Token::StarStar => (11, InfixKind::Binary(BinOp::Power)),
 
+                // range operator is always lower than normal arithmetic
+                Token::DotDot => {
+                    self.advance();
+                    
+                    // parse end of range if present (not followed by { or delimiter)
+                    let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon, Token::RBracket, Token::RParen]) {
+                        Some(Box::new(self.parse_expr(0)))
+                    } 
+                    
+                    else { None };
+
+                    left = Expr::Range {
+                        start: Some(Box::new(left)),
+                        end,
+                    };
+                    continue;
+                }
+
                 // erm
                 _ => break,
             };
@@ -369,8 +387,80 @@ impl<'src, 't> Parser<'src, 't> {
         left
     }
 
+    // gonna change the name, but this is all patterns that can be in a for loop (and potentially match and shit)
+    fn parse_pattern(&mut self) -> Pattern<'src> {
+        match self.cur() {
+            Some(Token::Underscore) => {
+                self.advance();
+                Pattern::Wildcard
+            }
+
+            Some(Token::DotDot) => {
+                self.advance();
+
+                // parse end if present
+                let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon]) {
+                    Some(Box::new(self.parse_expr(0)))
+                } 
+                
+                else {
+                    None
+                };
+
+                Pattern::Range { start: None, end }
+            }
+
+            Some(Token::Identifier(name)) => {
+                let n = *name;
+                self.advance();
+                Pattern::Ident(n)
+            }
+
+            // tuples
+            Some(Token::LParen) => {
+                self.advance();
+                let mut patterns = vec![self.parse_pattern()];
+
+                while self.matches(&Token::Comma) {
+                    self.advance();
+                    patterns.push(self.parse_pattern());
+                }
+
+                self.expect(|t| matches!(t, Token::RParen))
+                    .expect("expected ')' in tuple pattern");
+                
+                Pattern::Tuple(patterns)
+            }
+
+            // default
+            _ => Pattern::Wildcard,
+        }
+    }
+
+    fn parse_for_expr(&mut self) -> Expr<'src> {
+        // TODO replace the many expect calls with self.error this is the only way it was workin
+        let pattern: Pattern<'_> = self.parse_pattern();
+
+        // syntax: for _ in r1..r2 (TODO figure out step amts)
+        self.expect(|t: &Token<'_>| matches!(t, Token::In))
+            .expect("missing keyword 'in' inside for loop");
+
+        let iter = self.parse_expr(0);
+
+        // for loops need braces for right now (TODO one line for loops)
+        self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
+            .expect("expected '{' in for loop");
+        
+        let body: Expr<'_> = self.parse_block_expr();
+        
+        Expr::For {
+            pattern,
+            iter: Box::new(iter),
+            body: Box::new(body),
+        }
+    }
+
     fn parse_if_expr(&mut self) -> Expr<'src> {
-        // TODO replace the 2 expect calls with self.error this is the only way it was workin
         let cond: Expr<'_> = self.parse_expr(0);
         self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
             .expect("missing '{' before if body");
@@ -560,6 +650,19 @@ impl<'src, 't> Parser<'src, 't> {
                 expr: Box::new(self.parse_expr(12)),
             },
 
+            // prefix ranges (for slicing)
+            Token::DotDot => {
+                let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon, Token::RBracket, Token::RParen]) {
+                    Some(Box::new(self.parse_expr(0)))
+                } 
+                
+                else {
+                    None
+                };
+
+                Expr::Range { start: None, end }
+            }
+
             Token::LParen => {
                 let inner = self.parse_expr(0);
                 self.expect(|t: &Token<'_>| matches!(t, Token::RParen))
@@ -576,6 +679,7 @@ impl<'src, 't> Parser<'src, 't> {
 
             Token::If => self.parse_if_expr(),
             Token::While => self.parse_while_expr(),
+            Token::For => self.parse_for_expr(),
             Token::Match => self.parse_match_expr(),
 
             Token::LBrace => self.parse_block_expr(),
@@ -729,6 +833,7 @@ impl<'src, 't> Parser<'src, 't> {
                 | Token::LBrace
                 | Token::If
                 | Token::While
+                | Token::For
                 | Token::Minus
                 | Token::PlusPlus
                 | Token::MinusMinus

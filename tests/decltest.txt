@@ -29,6 +29,13 @@ let static test2: i32 = 5
 let static mutable staticMut = 5
 let static mutable staticMut: i32 = 5
 
+
+// block declarations (this is a stupid example, but it contains a tail and a block)
+let five: i32 = {
+    let value: i32 = 5
+    value
+}
+
 // SHOULD FAIL
 // NO TYPE:
 // let [const/static/mutable] inferred
@@ -39,7 +46,7 @@ let static mutable staticMut: i32 = 5
 //
 // EQUALS WITH NO RHS
 // let testing =
-let testing: i32 =
+// let testing: i32 =
 //
 // DISALLOWED PAIRINGS
 // let const mutable failure = 5
