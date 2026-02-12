@@ -94,6 +94,9 @@ pub enum Type<'src> {
 
     // type unlisted, or specifically marked as inferred
     Inferred,
+
+    // any type deduction errors
+    Error,
 }
 
 /// a small list of everything that can be on the left hand side of an assignment
@@ -364,4 +367,19 @@ pub enum Stmt<'src> {
         // global == static will prolly change that
         global: bool,
     },
+
+    // same with functions
+    FuncDecl {
+        name: Ident<'src>,
+        typ: Type<'src>,
+
+        // list of arguments
+        args: Vec<(Ident<'src>, Type<'src>)>,
+
+        // if no body it's a function prototype
+        body: Option<Expr<'src>>,
+    },
+
+    // improperly parsed statements
+    Error,
 }

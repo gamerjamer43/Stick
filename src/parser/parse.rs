@@ -126,6 +126,7 @@ impl<'src, 't> Parser<'src, 't> {
                     Token::LParen => {
                         self.advance();
 
+                        // TODO: turn this into self.eat_args()
                         // eat as many args as possible. default to take 8 before resizing then its ur problem lmao
                         let mut args: Vec<Expr<'_>> = Vec::with_capacity(8);
                         if !self.matches(&Token::RParen) {
@@ -134,12 +135,12 @@ impl<'src, 't> Parser<'src, 't> {
                             // match commas (and ending parenthesis)
                             while self.matches(&Token::Comma) {
                                 self.advance();
-                                if self.matches(&Token::RParen) {
-                                    break;
-                                }
 
                                 // evaluate THEN push
                                 args.push(self.parse_expr(0));
+                                if self.matches(&Token::RParen) {
+                                    break;
+                                }
                             }
 
                             // malformed calls
@@ -437,6 +438,111 @@ impl<'src, 't> Parser<'src, 't> {
         }
     }
 
+    fn parse_func(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
+        // TODO replace the many expect calls with self.error this is the only way it was workin
+        self.advance();
+        let name = match self.cur() {
+            Some(Token::Identifier(name)) => Ident(name),
+            _ => {
+                return Err(
+                    SyntaxError::Parse(ParseError::MissingExpected("function decl requires a name... did you forget it"))
+                );
+            }
+        };
+
+        // syntax: fn func(arg: type, arg2: type) -> rtntype { }
+        // unit type is colliding so if no args it's js the unit
+        self.advance();
+        let has_args = self.matches(&Token::LParen);
+        if !self.matches_any(&[Token::LParen, Token::Unit]) {
+            self.error(
+                SyntaxError::Parse(ParseError::MissingExpected("missing () around function args in definition"))
+            );
+        }
+
+        self.advance();
+
+        // you can use newlines to make ur args cleaner too
+        while self.matches(&Token::Newline) {
+            self.advance();
+        }
+
+        // TODO: make this use self.eat_args when its made
+        let mut args: Vec<(Ident<'src>, Type<'src>)> = Vec::with_capacity(8);
+        if has_args {
+            while !self.matches(&Token::RParen) {
+                let argname = match self.cur() {
+                    Some(Token::Identifier(name)) => Ident(name),
+                    _ => {
+                        return Err(
+                            SyntaxError::Parse(ParseError::MissingExpected("arguments also require a name... did you forget them"))
+                        );
+                    }
+                };
+
+                self.advance();
+                self.expect(|t: &Token<'_>| matches!(t, Token::Colon))
+                    .expect("arguments need to be typed, or specifically denoted compiler inferred");
+
+                let argtyp: Type<'_> =  self.parse_type();
+                args.push((argname, argtyp));
+
+                while self.cur() == Some(&Token::Newline) {
+                    self.advance();
+                }
+
+                println!("{:?}", self.cur());
+                if !self.matches_any(&[Token::Comma, Token::RParen]) {
+                    return Err(
+                        SyntaxError::Parse(ParseError::MissingExpected("arguments must be seperated by commas in the definition (may not have that be the case for calls)"))
+                    )
+                }
+
+                else if self.matches(&Token::Comma) && self.peek() != Some(&Token::RParen) {
+                    self.advance();
+                }
+            }
+
+            self.expect(|t: &Token<'_>| matches!(t, Token::RParen))
+                .expect("missing closing parenthesis around function args in definition");
+        }
+
+        self.expect(|t: &Token<'_>| matches!(t, Token::Arrow))
+            .expect("functions must contain an explicit return type");
+
+        // noticing how this is unnecessarily long now
+        let typ = self.parse_type();
+
+        // semicolon has to be on the same line
+        let body = if self.matches(&Token::Semicolon) {
+            None
+        } else {
+            // brace does not for all you headasses that do
+            // fn a () -> _
+            // {
+            while self.matches(&Token::Newline) {
+                self.advance();
+            }
+            
+            if self.expect(|t| matches!(t, Token::LBrace)).is_some() {
+                Some(self.parse_block_expr())
+            } else {
+                self.error(SyntaxError::Parse(
+                    ParseError::MissingExpected("function definitions must either end in a semicolon to show it's a prototype, or a brace initiating the body")
+                ));
+
+                Some(Expr::Unknown)
+            }
+        };
+        
+        // come back to this. two things you needa do
+        // TODO 1: self.eat_args
+        // TODO 2: self.parse_type
+        Ok(Stmt::FuncDecl {
+            name, typ, args, body,
+        })
+    }
+
     fn parse_for_expr(&mut self) -> Expr<'src> {
         // TODO replace the many expect calls with self.error this is the only way it was workin
         let pattern: Pattern<'_> = self.parse_pattern();
@@ -523,6 +629,49 @@ impl<'src, 't> Parser<'src, 't> {
         todo!("gabagool")
     }
 
+    fn parse_type(&mut self) -> Type<'src> {
+        // TODO: add support for array and generic types
+        let typ: Type<'src> = match self
+            .expect(|t| matches!(t, Token::Identifier(_) | Token::Unit | Token::Underscore))
+        {
+            Some(Token::Identifier(typname)) => match *typname {
+                "i8" => Type::I8,
+                "u8" => Type::U8,
+                "i16" => Type::I16,
+                "u16" => Type::U16,
+                "i32" => Type::I32,
+                "u32" => Type::U32,
+                "i64" => Type::I64,
+                "u64" => Type::U64,
+                "f32" => Type::F32,
+                "f64" => Type::F64,
+                "bool" => Type::Bool,
+                "char" => Type::Char,
+                "str" => Type::Str,
+                _ => Type::Ident(Ident(typname)),
+            },
+
+            // unit type and inferred have to be handled seperately
+            Some(Token::Unit) => Type::Unit,
+            Some(Token::Underscore) => Type::Inferred,
+
+            // push missing type after :
+            _ => {
+
+                // TODO: potentially borrow parse_type as immutable and deal with the error outside
+                // this way we can have seperate errors for function type and variable type
+                self.error(SyntaxError::Parse(ParseError::MissingExpected(
+                    "invalid or missing type (either none after the : or a type that can't be evaluated by the parser.",
+                )));
+                
+                Type::Error
+            }
+        };
+
+        // durrrrr make type the tail obviously
+        typ
+    }
+
     fn parse_block_expr(&mut self) -> Expr<'src> {
         let mut stmts: Vec<Stmt<'src>> = Vec::new();
         let mut tail: Option<Box<Expr<'src>>> = None;
@@ -554,6 +703,11 @@ impl<'src, 't> Parser<'src, 't> {
                 }
 
                 Token::Let => match self.parse_let() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
+                Token::Fn => match self.parse_func() {
                     Ok(stmt) => stmts.push(stmt),
                     Err(e) => self.error(e),
                 },
@@ -724,48 +878,6 @@ impl<'src, 't> Parser<'src, 't> {
             }
         };
 
-        // consume annotation
-        let typ: Type<'_> = if self.matches(&Token::Colon) {
-            self.advance();
-
-            // TODO: add support for array and generic types
-            match self
-                .expect(|t| matches!(t, Token::Identifier(_) | Token::Unit | Token::Underscore))
-            {
-                Some(Token::Identifier(typname)) => match *typname {
-                    "i8" => Type::I8,
-                    "u8" => Type::U8,
-                    "i16" => Type::I16,
-                    "u16" => Type::U16,
-                    "i32" => Type::I32,
-                    "u32" => Type::U32,
-                    "i64" => Type::I64,
-                    "u64" => Type::U64,
-                    "f32" => Type::F32,
-                    "f64" => Type::F64,
-                    "bool" => Type::Bool,
-                    "char" => Type::Char,
-                    "str" => Type::Str,
-                    _ => Type::Ident(Ident(typname)),
-                },
-
-                // unit type and inferred have to be handled seperately
-                Some(Token::Unit) => Type::Unit,
-                Some(Token::Underscore) => Type::Inferred,
-
-                // push missing type after :
-                _ => {
-                    return Err(SyntaxError::Parse(ParseError::MissingExpected(
-                        "expected type name after ':'",
-                    )));
-                }
-            }
-        }
-        // (if no annotation the type is inferred by the compiler)
-        else {
-            Type::Inferred
-        };
-
         // expected equals to get to right hand of assignment (if none it's a decl)
         let mut init = None;
         if self.matches(&Token::Assign) {
@@ -783,6 +895,15 @@ impl<'src, 't> Parser<'src, 't> {
                 }
             }
         }
+
+        let typ = if self.matches(&Token::Colon) {
+            self.advance();
+            self.parse_type()
+        }
+        
+        else {
+            Type::Inferred
+        };
 
         // can't automatically deduce type on assignment (maybe make it so that the type is filled when assigned to?)
         if typ == Type::Inferred && init.is_none() {
@@ -845,6 +966,13 @@ impl<'src, 't> Parser<'src, 't> {
                     Ok(stmt) => nodes.push(stmt),
                     Err(e) => self.error(e),
                 },
+
+                // same dispatch for parse func
+                Token::Fn => match self.parse_func() {
+                    Ok(stmt) => nodes.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
 
                 // control flow: this dont seem right but...
                 // Token::Break => nodes.push(Stmt::Break),

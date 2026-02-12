@@ -2,12 +2,6 @@
 
 if five == 5 {
     writeln("well fucking obviously {five} == 5")
-
-    // prefix increment
-    ++five
-
-    // postfix decrement
-    five--
 }
 
 else if five == 6 {
@@ -34,6 +28,16 @@ while five == 5 {
 
 // statements r being jank so i keep shit here just to test
 writeln("fuck")
+
+fn name(arg: _, arg2: ()) -> ();
+
+fn name2(arg: _, arg2: ()) -> () {
+    writeln("hi")
+}
+
+fn name3() -> () {
+    writeln("hi")
+}
 
 
 // TODO: match statements
