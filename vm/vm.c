@@ -37,6 +37,10 @@ void vm_init(VM* vm) {
     if (!vm) return;
     *vm = (VM){0};
 
+    // right now this shit is just a leak only allocator...
+    // gotta add GC
+    heap_init(&vm->heap);
+
     // TODO: potentially limit registers and frames here (maxregs and maxframes)
 }
 
@@ -94,6 +98,9 @@ void vm_free(VM* vm) {
         vm->consts = NULL;
         vm->constcount = 0;
     }
+
+    // free heap (THIS cleans up any allocations... the GC will do most of that)
+    heap_free(&vm->heap);
 
     vm->ip         = 0;
     vm->panic_code = NO_ERROR;

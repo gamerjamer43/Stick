@@ -253,8 +253,12 @@ HeapRef heap_alloc_string(Heap* h, const char* str, u32 len) {
         return HEAP_REF_NULL;
     }
 
-    // then safely deref
+    // then safely deref (and a guard for the extra rare fucky)
     HeapString* s = (HeapString*)heap_deref(h, ref);
+    if (!s) {
+        free(data);
+        return HEAP_REF_NULL;
+    }
     s->data = data;
     s->length = len;
     s->hash = 0;
@@ -285,8 +289,12 @@ HeapRef heap_alloc_array(Heap* h, u8 elem_type, u32 cap) {
         return HEAP_REF_NULL;
     }
 
-    // deref and fill
+    // deref and fill (again with the guard)
     HeapArray* arr = (HeapArray*)heap_deref(h, ref);
+    if (!arr) {
+        free(data);
+        return HEAP_REF_NULL;
+    }
     arr->data = data;
     arr->length = 0;
     arr->capacity = cap;

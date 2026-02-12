@@ -141,6 +141,7 @@ typedef struct Frame {
 
 
 // the big dawg
+// TODO: figure out padding. some areas r padded but some arent so i'm concerned
 typedef struct VM {
     // stream of instructions (and count)
     const Instruction* istream;
@@ -169,6 +170,9 @@ typedef struct VM {
     Frame* current;
     u32    framecount;  // current count
     u32    framecap;    // max that can be filled BEFORE A RESIZE. max TOTAL is 65536 (MAX_REGISTERS)
+
+    // heap
+    Heap heap;
 
     // last error/panic info
     u32 panic_code;

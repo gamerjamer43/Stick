@@ -210,7 +210,7 @@ static inline void heap_mark_gray(Heap* h, HeapRef ref) {
         u32 new_cap = h->gray_cap ? h->gray_cap * 2 : 64;
         HeapRef* ns = (HeapRef*)realloc(h->gray_stack, new_cap * sizeof(HeapRef));
         if (!ns) {
-            // OOM during GC is fatal - can't maintain tri-color invariants
+            // OOM during GC is fatal. can't maintain tri-color invariants
             // TODO: make this panic the VM
             fprintf(stderr, "FATAL: OOM in heap_mark_gray, aborting\n");
             abort();
