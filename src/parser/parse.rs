@@ -535,9 +535,7 @@ impl<'src, 't> Parser<'src, 't> {
             }
         };
         
-        // come back to this. two things you needa do
-        // TODO 1: self.eat_args
-        // TODO 2: self.parse_type
+        // TODO: self.eat_args
         Ok(Stmt::FuncDecl {
             name, typ, args, body,
         })
@@ -626,13 +624,66 @@ impl<'src, 't> Parser<'src, 't> {
     }
 
     fn parse_match_expr(&mut self) -> Expr<'src> {
-        todo!("gabagool")
+        self.advance();
+
+        // an expression is what gets matched (whether that be a value or something that evaluates to a value)
+        let item = self.parse_expr(0);
+
+        // matches are surrounded with braces
+        self.expect(|t| matches!(t, &Token::LBrace))
+            .expect("match arms must be surrounded by braces");
+
+        let mut branches = Vec::new();
+
+        while !self.matches(&Token::RBrace) {
+            // skip newlines
+            while self.matches(&Token::Newline) {
+                self.advance();
+            }
+
+            // check for closing brace before parsing pattern
+            if self.matches(&Token::RBrace) {
+                break;
+            }
+
+            // parse the pattern
+            let pattern = self.parse_pattern();
+
+            // expect ->
+            self.expect(|t| matches!(t, &Token::Arrow))
+                .expect("expected '->' after pattern in match arm");
+
+            // parse the body (either a single expr or a block)
+            let body = if self.matches(&Token::LBrace) {
+                Stmt::Expr(self.parse_block_expr())
+            } else {
+                Stmt::Expr(self.parse_expr(0))
+            };
+
+            // optional guard (if you support them)
+            let guard = None; // TODO: implement guards if needed
+
+            branches.push(Branch { pattern, guard, body });
+
+            // handle delimiters between arms
+            while self.matches_any(&[Token::Newline, Token::Semicolon]) {
+                self.advance();
+            }
+        }
+
+        self.expect(|t| matches!(t, &Token::RBrace))
+            .expect("expected '}' to close match expression");
+
+        Expr::Match {
+            item: Box::new(item),
+            branches,
+        }
     }
 
     fn parse_type(&mut self) -> Type<'src> {
         // TODO: add support for array and generic types
         let typ: Type<'src> = match self
-            .expect(|t| matches!(t, Token::Identifier(_) | Token::Unit | Token::Underscore))
+            .expect(|t| matches!(t, &Token::Identifier(_) | &Token::Unit | &Token::Underscore))
         {
             Some(Token::Identifier(typname)) => match *typname {
                 "i8" => Type::I8,
@@ -878,7 +929,17 @@ impl<'src, 't> Parser<'src, 't> {
             }
         };
 
-        // expected equals to get to right hand of assignment (if none it's a decl)
+        // parse type annotation (if its there)
+        let typ = if self.matches(&Token::Colon) {
+            self.advance();
+            self.parse_type()
+        }
+        
+        else {
+            Type::Inferred
+        };
+
+        // parse initializer (also dependent on if its there)
         let mut init = None;
         if self.matches(&Token::Assign) {
             self.advance();
@@ -895,15 +956,6 @@ impl<'src, 't> Parser<'src, 't> {
                 }
             }
         }
-
-        let typ = if self.matches(&Token::Colon) {
-            self.advance();
-            self.parse_type()
-        }
-        
-        else {
-            Type::Inferred
-        };
 
         // can't automatically deduce type on assignment (maybe make it so that the type is filled when assigned to?)
         if typ == Type::Inferred && init.is_none() {

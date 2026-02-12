@@ -39,5 +39,10 @@ fn name3() -> () {
     writeln("hi")
 }
 
+match case {
+    1 -> writeln("hi")
+    _ -> writeln("error")
+}
+
 
 // TODO: match statements
