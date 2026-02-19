@@ -29,10 +29,7 @@ def main():
     for test in tests:
         cmd = args.cmd.split() if args.cmd else []
         result = run(cmd + [args.path, str(test)], capture_output=not args.verbose, text=True)
-        
-        # valgrind returns 0 or 1 instead
-        if valgrind: code = result.returncode in (0, 1)
-        else: code = result.returncode == 0
+        code = result.returncode == 0
         
         if code:
             passed.append(test.name)

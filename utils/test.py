@@ -92,7 +92,7 @@ def ins(op, a = 0, b = 0, c = 0) -> int:
 
 # general instruction helpers
 def HALT():             return ins(Opcode.HALT)
-def PANIC(code=1):      return ins(Opcode.PANIC, code)
+def PANIC(code=0):      return ins(Opcode.PANIC, code)
 def LOADI(r, n):        return ins(Opcode.LOADI, r, (n >> 8) & 0xFF, n & 0xFF)
 def LOADC(r, idx):      return ins(Opcode.LOADC, r, idx)
 def LOADG(r, idx):      return ins(Opcode.LOADG, r, idx)

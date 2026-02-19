@@ -207,6 +207,12 @@ bool vm_call(
 // run until HALT/PANIC
 bool vm_run(VM* vm);
 
+// gc helpers
+void vm_mark_roots(VM* vm);  // marks heap refs in both regs and globals
+void vm_gc(VM* vm);          // major every 8 minors, general cycle
+void vm_gc_major(VM* vm);    // force a full major collection
+void vm_gc_minor(VM* vm);    // force a minor collection
+
 // panic helper to print an error message by code
 u32 vm_panic(u32 code);
 

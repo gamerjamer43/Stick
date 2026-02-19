@@ -3,7 +3,7 @@
 .PHONY: all clean run test
 
 CC := gcc
-PYTHON ?= python
+PYTHON ?= python3
 PROGRAMS_DIR := tests
 
 # compiler flags. add -g for debug
@@ -42,7 +42,7 @@ all: test $(TARGET)
 
 test: clean $(TARGET)
 	$(PYTHON) ./utils/test.py
-	$(PYTHON) ./utils/runner.py
+	$(PYTHON) ./utils/runner.py -p ./vm.out -c "valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all --track-origins=yes --errors-for-leak-kinds=all --error-exitcode=1"
 
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

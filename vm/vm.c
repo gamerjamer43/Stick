@@ -106,6 +106,74 @@ void vm_free(VM* vm) {
     vm->panic_code = NO_ERROR;
 }
 
+/**
+ * mark all heap references reachable from VM roots (registers + globals)
+ * call this after heap_begin_gc and before heap_collect
+ */
+void vm_mark_roots(VM* vm) {
+    if (!vm) return;
+
+    // scan active regs
+    if (vm->regs && vm->current) {
+        u32 top = vm->current->base + vm->current->regc;
+
+        // objects hold heap refs, but callables hold a function pointer
+        for (u32 i = 0; i < top; i++) {
+            if (vm->regs->types[i] == OBJ) {
+                HeapRef ref;
+                memcpy(&ref, &vm->regs->payloads[i], sizeof(HeapRef));
+                heap_mark_gray(&vm->heap, ref);
+            }
+        }
+    }
+
+    // then scan globals
+    if (vm->globals) {
+        for (u32 i = 0; i < vm->globalcount; i++) {
+            if (vm->globals[i].type == OBJ) {
+                HeapRef ref;
+                memcpy(&ref, vm->globals[i].val, sizeof(HeapRef));
+                heap_mark_gray(&vm->heap, ref);
+            }
+        }
+    }
+}
+
+/**
+ * runs a minor gc most of the time,
+ * escalates to major gc every h->major_interval minors
+ */
+void vm_gc(VM* vm) {
+    if (!vm) return;
+    Heap* h = &vm->heap;
+
+    if (h->minor_count >= h->major_interval) {
+        vm_gc_major(vm);
+    } else {
+        vm_gc_minor(vm);
+    }
+}
+
+/**
+ * force a full major collection (all generations)
+ */
+void vm_gc_major(VM* vm) {
+    if (!vm) return;
+    heap_begin_major_gc(&vm->heap);
+    vm_mark_roots(vm);
+    heap_collect(&vm->heap);
+}
+
+/**
+ * minor collection: only sweep young objects, promote survivors
+ */
+void vm_gc_minor(VM* vm) {
+    if (!vm) return;
+    heap_begin_minor_gc(&vm->heap);
+    vm_mark_roots(vm);
+    heap_minor_collect(&vm->heap);
+}
+
 
 /**
  * load a compiled chunk into the VM instance. the VM takes ownership of the instructions
@@ -346,7 +414,14 @@ bool vm_run(VM* vm) {
     if (!push_frame(vm, &entry)) return false;
     vm->current = &vm->frames[vm->framecount - 1];
 
+    // gc runs every 1024 instructions just in case
+    u32 gc_counter = 0;
     while (vm->ip < vm->icount) {
+        if (++gc_counter >= 1024) {
+            gc_counter = 0;
+            if (heap_should_gc(&vm->heap)) vm_gc(vm);
+        }
+
         // pull current instruction and increment ip
         Instruction ins = vm->istream[vm->ip++];
 

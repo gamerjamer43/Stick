@@ -44,10 +44,11 @@ bool bucket_init(Bucket* b, u8 type, u16 slot_size, u32 cap) {
     }
 
     b->used = 0;
+    b->old_boundary = 0;
     b->type = type;
     b->capacity = cap;
     b->slot_size = slot_size;
-    b->generation = 0;
+    b->_pad = 0;
     return true;
 }
 
@@ -146,6 +147,10 @@ bool heap_init(Heap* h) {
 
     // set starter threshold to 1kb (prolly will increase...)
     h->gc_threshold = 1024;
+
+    // major gc happens every 8 minor sweeps
+    h->minor_count = 0;
+    h->major_interval = 8;
     return true;
 }
 
@@ -174,7 +179,9 @@ static void slot_destroy(Bucket* b, u32 idx) {
             break;
         }
         case HEAP_TYPE_OBJECT: {
-            // TODO: implement object fields (and free safely)
+            HeapObject* obj = (HeapObject*)slot;
+            free(obj->fields);
+            obj->fields = NULL;
             break;
         }
 
@@ -229,7 +236,6 @@ void* heap_deref(Heap* h, HeapRef ref) {
 }
 
 // wrapper around heapref_type with nullchecking
-// TODO: determine if i need this???
 HeapType heapref_type_nc(HeapRef ref) {
     return (ref == HEAP_REF_NULL) ? HEAP_TYPE_COUNT : (HeapType)heapref_type(ref);
 }
@@ -306,6 +312,40 @@ HeapRef heap_alloc_array(Heap* h, u8 elem_type, u32 cap) {
     return ref;
 }
 
+// allocate a struct (just the data for proper packing/alignment)
+HeapRef heap_alloc_object(Heap* h, u16 type_id, u16 field_count) {
+    if (!h) return HEAP_REF_NULL;
+
+    // allocate SAFELY (in the rare cases there really is an out of memory this is protection)
+    Value* fields = NULL;
+    if (field_count > 0) {
+        fields = (Value*)calloc(field_count, sizeof(Value));
+        if (!fields) return HEAP_REF_NULL;
+    }
+    HeapRef ref = heap_alloc(h, HEAP_TYPE_OBJECT);
+
+    // no slot leaks here buddy boy
+    if (ref == HEAP_REF_NULL) {
+        free(fields);
+        return HEAP_REF_NULL;
+    }
+
+    // deref and fill
+    HeapObject* obj = (HeapObject*)heap_deref(h, ref);
+    if (!obj) {
+        free(fields);
+        return HEAP_REF_NULL;
+    }
+
+    obj->type_id = type_id;
+    obj->field_count = field_count;
+    obj->fields = fields;
+
+    // bump bump
+    h->total_allocated += field_count * sizeof(Value);
+    return ref;
+}
+
 
 // actual gc, inlines are in the header
 void heap_trace(Heap* h) {
@@ -318,17 +358,37 @@ void heap_trace(Heap* h) {
         // trace children by type
         switch (type) {
             case HEAP_TYPE_ARRAY: {
-                // TODO: mark array elements if they can be HeapRefs
+                HeapArray* arr = (HeapArray*)heap_deref(h, ref);
+                if (!arr) break;
+
+                // only trace if elements are heap references
+                if (arr->elem_type == OBJ || arr->elem_type == CALLABLE) {
+                    HeapRef* elems = (HeapRef*)arr->data;
+                    for (u32 i = 0; i < arr->length; i++) {
+                        heap_mark_gray(h, elems[i]);
+                    }
+                }
+
                 break;
             }
 
             case HEAP_TYPE_TABLE: {
-                // TODO: mark table keys/values
+                // TODO: write the fuckin table lol
                 break;
             }
 
             case HEAP_TYPE_OBJECT: {
-                // TODO: mark object fields
+                HeapObject* obj = (HeapObject*)heap_deref(h, ref);
+                if (!obj || !obj->fields) break;
+
+                // trace any heap refs in fields
+                for (u16 i = 0; i < obj->field_count; i++) {
+                    if (obj->fields[i].type == OBJ || obj->fields[i].type == CALLABLE) {
+                        HeapRef child;
+                        memcpy(&child, obj->fields[i].val, sizeof(HeapRef));
+                        heap_mark_gray(h, child);
+                    }
+                }
                 break;
             }
 
@@ -343,12 +403,202 @@ void heap_trace(Heap* h) {
 
 void heap_sweep(Heap* h) {
     if (!h) return;
+    h->gc_state = GC_SWEEP;
 
-    // TODO: compact or free-list unmarked slots
-    // for now: just bump threshold ig... everything gets freed at the end
+    // store how much got freed (to get below the threshold)
+    size_t freed = 0;
+
+    // check each bucket for survivors
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        if (!b->data || !b->marks) continue;
+
+        u32 survivors = 0;
+        for (u32 j = 0; j < b->used; j++) {
+            u32 w = j / 32, off = (j % 32) * 2;
+            u8 color = (b->marks[w] >> off) & 0x3;
+
+            // living ppl get SKIPPED
+            if (color == MARK_BLACK) {
+                survivors++;
+                continue;
+            }
+
+            // either white or gray. shouldn't be gray after trace but whateva
+            // frees inner allocs so no leakage
+            void* slot = b->data + (j * b->slot_size);
+            switch (b->type) {
+                case HEAP_TYPE_STRING: {
+                    HeapString* s = (HeapString*)slot;
+                    if (s->data) {
+                        freed += s->length + 1;
+                        free(s->data);
+                        s->data = NULL;
+                    }
+                    break;
+                }
+
+                case HEAP_TYPE_ARRAY: {
+                    HeapArray* arr = (HeapArray*)slot;
+                    if (arr->data) {
+                        freed += arr->capacity * arr->elem_size;
+                        free(arr->data);
+                        arr->data = NULL;
+                    }
+                    break;
+                }
+
+                case HEAP_TYPE_TABLE: {
+                    HeapTable* t = (HeapTable*)slot;
+                    if (t->buckets) {
+                        // TODO: track table bucket sizes properly (tables arent even implemented. might steal a hashtable header)
+                        free(t->buckets);
+                        t->buckets = NULL;
+                    }
+                    break;
+                }
+
+                case HEAP_TYPE_OBJECT: {
+                    HeapObject* obj = (HeapObject*)slot;
+                    if (obj->fields) {
+                        freed += obj->field_count * sizeof(Value);
+                        free(obj->fields);
+                        obj->fields = NULL;
+                    }
+                    break;
+                }
+                default: break;
+            }
+        }
+
+        // entire bucket is DEAD. reclaim slot mem by resetting the bump pointer
+        if (survivors == 0 && b->used > 0) {
+            freed += b->used * b->slot_size;
+            b->used = 0;
+        }
+    }
+
+    // update alloc tracker
+    if (freed <= h->total_allocated) h->total_allocated -= freed;
+    else h->total_allocated = 0;
+
+    // double and reset state (my balls hurt)
     h->gc_threshold = h->total_allocated * 2;
-
-    // im p sure i already ensure its 1024 but whatever
     if (h->gc_threshold < 1024) h->gc_threshold = 1024;
     h->gc_state = GC_IDLE;
+}
+
+// trace and sweep helper for MAJOR collection. caller marks roots
+void heap_collect(Heap* h) {
+    if (!h) return;
+    h->gc_state = GC_TRACE;
+    heap_trace(h);
+    heap_sweep(h);
+
+    // everything alive is now old gen
+    for (u32 i = 0; i < h->bucket_count; i++)
+        h->buckets[i].old_boundary = h->buckets[i].used;
+
+    h->minor_count = 0;
+}
+
+// sweep only young region
+void heap_sweep_young(Heap* h) {
+    if (!h) return;
+    h->gc_state = GC_SWEEP;
+
+    size_t freed = 0;
+
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        if (!b->data || !b->marks) continue;
+
+        u32 young_survivors = 0;
+        for (u32 j = b->old_boundary; j < b->used; j++) {
+            u32 w = j / 32, off = (j % 32) * 2;
+            u8 color = (b->marks[w] >> off) & 0x3;
+
+            if (color == MARK_BLACK) {
+                young_survivors++;
+                continue;
+            }
+
+            // free inner allocations if the obj dies young
+            void* slot = b->data + (j * b->slot_size);
+            switch (b->type) {
+                case HEAP_TYPE_STRING: {
+                    HeapString* s = (HeapString*)slot;
+                    if (s->data) {
+                        freed += s->length + 1;
+                        free(s->data);
+                        s->data = NULL;
+                    }
+                    break;
+                }
+
+                case HEAP_TYPE_ARRAY: {
+                    HeapArray* arr = (HeapArray*)slot;
+                    if (arr->data) {
+                        freed += arr->capacity * arr->elem_size;
+                        free(arr->data);
+                        arr->data = NULL;
+                    }
+                    break;
+                }
+
+                case HEAP_TYPE_TABLE: {
+                    HeapTable* t = (HeapTable*)slot;
+                    if (t->buckets) {
+                        free(t->buckets);
+                        t->buckets = NULL;
+                    }
+                    break;
+                }
+
+                case HEAP_TYPE_OBJECT: {
+                    HeapObject* obj = (HeapObject*)slot;
+                    if (obj->fields) {
+                        freed += obj->field_count * sizeof(Value);
+                        free(obj->fields);
+                        obj->fields = NULL;
+                    }
+                    break;
+                }
+                default: break;
+            }
+        }
+
+        // if ALL young objects died, reclaim bump space back to old boundary
+        if (young_survivors == 0 && b->used > b->old_boundary) {
+            freed += (b->used - b->old_boundary) * b->slot_size;
+            b->used = b->old_boundary;
+        }
+    }
+
+    if (freed <= h->total_allocated) h->total_allocated -= freed;
+    else h->total_allocated = 0;
+
+    h->gc_threshold = h->total_allocated * 2;
+    if (h->gc_threshold < 1024) h->gc_threshold = 1024;
+    h->gc_state = GC_IDLE;
+}
+
+// promote surviving young objects into old gen
+void heap_promote_survivors(Heap* h) {
+    if (!h) return;
+
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        b->old_boundary = b->used;
+    }
+}
+
+// trace, sweep babies and promote
+void heap_minor_collect(Heap* h) {
+    if (!h) return;
+    h->gc_state = GC_TRACE;
+    heap_trace(h);
+    heap_sweep_young(h);
+    heap_promote_survivors(h);
+    h->minor_count++;
 }

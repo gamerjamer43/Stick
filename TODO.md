@@ -15,6 +15,8 @@ ORDER OF OPERATIONS STARTING TOMORROW (IDC IF YOU BREAK IT. BUT U SHOULD WRITE T
 ## backlog
 asap:
 - get started on the emitter, make it do basic register ops and math
+- setup heap to use forwarding pointers (and figure out how to do that)
+- heap caching (heavily used heap objects should load from a higher precedence array, or even actually cache the line)
 - opcodes:
     - TAILCALL (duh its listed 3 times its just cool to me)
     - NEWARR, NEWTABLE, NEWOBJ (when heap done, maybe add a raw ALLOC too)
@@ -23,12 +25,8 @@ asap:
     - CONCAT, STRLEN (string ops)
 
 decisions:
-- decide on heap model (bump allocator: requires less frees, and best for generational or free list: you can free whenever you want, whenever you alloc more you mark the last word as a pointer to the next areas first word)
-- decide on gc model (likely either bump bucketed + generational, or tricolor mark and sweep. bump = fast, tricolor = clean)
 - decide on lookup model (bitmap seems fine, but i need to know the max U, so prob hashmap)
-- decide on header size (16 bytes with a 40 byte per type header seems fine but i need to logic that too could get it down)
 - decide on another potential Value conversion (do i want to suck up the padding after all that fucking work to store some shit in the remaining 7 bytes)
-- decide on object layout (already mostly done, just want to finalize some things)
 - decide on calling convention (still need to finalize. as of rn frames slot their args in the front registers, i could dedicate some, and i havent tested c native calling but it is pretty basic so should work. *out might contain pointer structures tho so i have to figure THAT out too... prolly the 2nd most complex besides header/heap and the most detail intensive)
 - decide on numeric types (how will i offer <64 bit ints, VM level or compiler level)
 - decide on error model (panic codes are runtime errors but i could just store a char* to a message and ref THAT. i think that may even be less overhead than dealing w it in vm_panic though i need to confirm no UAF/double free)

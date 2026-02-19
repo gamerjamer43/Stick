@@ -14,3 +14,6 @@
 
 # emitted bytecode
 *.stk
+
+# hashmap impl i may or may not use
+hashmap.h

@@ -85,9 +85,10 @@ typedef struct {
     u64* marks;         // 2 bits marking (00, 01, 10) per slot (32 per u64, then double)
     u32  capacity;      // total slots allocated
     u32  used;          // bump pointer (next free index)
+    u32  old_boundary;  // slots [0, old_boundary) are old gen, [old_boundary, used) are children
     u16  slot_size;     // bytes per slot
     u8   type;          // HeapType enum
-    u8   generation;    // 0 = young, 1+ = old
+    u8   _pad;          // alignment padding (was generation but it got replaced, idk what imma put here now)
 } Bucket;
 
 
@@ -114,12 +115,12 @@ typedef struct {
     u32   capacity;     // total capacity (before a resize)
 } HeapTable;
 
-// user-defined, fields follow header
+// user-defined struct (methods live in code, not data)
+// methods r lit just functions that take a HeapRef to "self" as first arg
 typedef struct {
-    u16   type_id;      // type registry id
-    u16   field_count;  // number of fields
-
-    // TODO: figure out how to keep a HeapRef to ALL FIELDS (so heap objects r only 64 bits)
+    u16    type_id;      // type registry id (used to look up methods/vtable)
+    u16    field_count;  // number of fields
+    Value* fields;       // malloc'd array of field values
 } HeapObject;
 
 
@@ -137,6 +138,10 @@ typedef struct {
     // alloc tracking
     size_t total_allocated; // total bytes allocated
     size_t gc_threshold;    // sweep when we reach this, then 1.5-2x it
+
+    // generational tracking
+    u32    minor_count;     // number of minor GCs since last major
+    u32    major_interval;  // trigger a major every N minors (default 8)
 } Heap;
 
 // bucket api
@@ -158,6 +163,7 @@ void*    heap_deref(Heap* h, HeapRef ref);
 // easy allocation helpers
 HeapRef heap_alloc_string(Heap* h, const char* str, u32 len);
 HeapRef heap_alloc_array(Heap* h, u8 elem_type, u32 capacity);
+HeapRef heap_alloc_object(Heap* h, u16 type_id, u16 field_count);
 
 // gc api
 // validate heapref before trusting
@@ -225,6 +231,16 @@ static inline void heap_mark_gray(Heap* h, HeapRef ref) {
     h->gray_stack[h->gray_count++] = ref;
 }
 
+// clear marks for only young region of a bucket
+static inline void bucket_clear_young_marks(Bucket* b) {
+    if (!b || !b->marks) return;
+
+    for (u32 j = b->old_boundary; j < b->used; j++) {
+        u32 w = j / 32, off = (j % 32) * 2;
+        b->marks[w] &= ~(0x3ULL << off);
+    }
+}
+
 // mark all items white (start of gc cycle)
 static inline void heap_clear_marks(Heap* h) {
     if (!h) return;
@@ -233,11 +249,43 @@ static inline void heap_clear_marks(Heap* h) {
         bucket_clear_marks(&h->buckets[i]);
 }
 
-// begin a new GC cycle (resets per-cycle state)
-static inline void heap_begin_gc(Heap* h) {
+// clear only young marks across ALL buckets
+static inline void heap_clear_young_marks(Heap* h) {
+    if (!h) return;
+
+    for (u32 i = 0; i < h->bucket_count; i++)
+        bucket_clear_young_marks(&h->buckets[i]);
+}
+
+// mark all old slots BLACK so they survive minor GC without tracing
+static inline void heap_protect_old(Heap* h) {
+    if (!h) return;
+
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        if (!b->data || !b->marks) continue;
+
+        for (u32 j = 0; j < b->old_boundary; j++) {
+            u32 w = j / 32, off = (j % 32) * 2;
+            b->marks[w] = (b->marks[w] & ~(0x3ULL << off))
+                | ((u64)MARK_BLACK << off);
+        }
+    }
+}
+
+// begin a MAJOR GC cycle (everything is fair game)
+static inline void heap_begin_major_gc(Heap* h) {
     if (!h) return;
     heap_clear_marks(h);
-    
+    h->gray_count = 0;
+    h->gc_state = GC_MARK;
+}
+
+// begin a MINOR GC cycle (only young objects)
+static inline void heap_begin_minor_gc(Heap* h) {
+    if (!h) return;
+    heap_clear_young_marks(h);
+    heap_protect_old(h);
     h->gray_count = 0;
     h->gc_state = GC_MARK;
 }
@@ -249,5 +297,13 @@ static inline bool heap_should_gc(Heap* h) {
 
 void heap_trace(Heap* h);
 void heap_sweep(Heap* h);
+void heap_sweep_young(Heap* h);
+void heap_promote_survivors(Heap* h);
+
+// caller is responsible for marking roots
+void heap_collect(Heap* h);
+
+// trace and sweep young only, and promote da survivors caller still marks roots
+void heap_minor_collect(Heap* h);
 
 #endif
