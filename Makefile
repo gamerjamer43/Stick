@@ -3,12 +3,12 @@
 .PHONY: all clean run test
 
 CC := gcc
-PYTHON ?= python3
 PROGRAMS_DIR := tests
 
 # compiler flags. add -g for debug
 FLAGS := -std=c99 -Wall -Wextra -O3 -fno-common -I. -Ivm -Iio
 
+# link time flags (which i didn't rly keep sep but i'll leave here)
 LDFLAGS :=
 
 SRC  := $(wildcard *.c */*.c)
@@ -16,7 +16,9 @@ OBJS := $(SRC:.c=.o)
 DEPS := $(OBJS:.o=.d)
 
 ifeq ($(OS),Windows_NT)
+PYTHON := python
 TARGET := vm.exe
+RUNNER_ARGS :=
 RUN    := .\$(TARGET)
 
 # properly convert folder paths so make dont think theyre flags
@@ -27,6 +29,8 @@ clean:
 	-@if exist $(PROGRAMS_DIR) rmdir /S /Q $(PROGRAMS_DIR)
 
 else
+RUNNER_ARGS := -p ./vm.out -c "valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all --track-origins=yes --errors-for-leak-kinds=all --error-exitcode=1"
+PYTHON := python3
 TARGET := vm.out
 RUN    := ./$(TARGET)
 
@@ -42,7 +46,7 @@ all: test $(TARGET)
 
 test: clean $(TARGET)
 	$(PYTHON) ./utils/test.py
-	$(PYTHON) ./utils/runner.py -p ./vm.out -c "valgrind --tool=memcheck --leak-check=full --show-leak-kinds=all --track-origins=yes --errors-for-leak-kinds=all --error-exitcode=1"
+	$(PYTHON) ./utils/runner.py $(RUNNER_ARGS)
 
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $@

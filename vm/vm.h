@@ -107,6 +107,16 @@ static inline u32 op_a  (Instruction ins) { return (ins >> 16) & 0xFFu; }
 static inline u32 op_b  (Instruction ins) { return (ins >>  8) & 0xFFu; }
 static inline u32 op_c  (Instruction ins) { return (ins >>  0) & 0xFFu; }
 
+// for sizing ararys (i also may find use elsewhere, but again)
+/**
+ * does a zero extension of the last 2 bytes of the instruction
+ * @param ins a 32 bit instruction
+ * @returns an unsigned 32 bit int
+ */
+static inline u32 op_unsigned_u16(Instruction ins) {
+    return ((u32)(ins << 16) >> 16);
+}
+
 // for JMP (which i may find use elsewhere but just to clean it for rn)
 // relies on the same behavior as below
 /**
@@ -132,11 +142,11 @@ static inline i32 op_signed_i24(Instruction ins) {
 
 // call frames
 typedef struct Frame {
+    Func* callee;  // function currently being executed
     u32   jump;    // where to jump back to upon return
     u16   base;    // base register index for this call (registers are owned by the vm)
     u16   regc;    // number of registers reserved for this frame
     u16   reg;     // register to store return value in
-    Func* callee;  // function currently being executed
 } Frame;
 
 
@@ -259,6 +269,47 @@ static inline bool require_type(VM* vm, u32 idx, u8 expect) {
 
 // register a native function. may do this a different way
 // Func* vm_new_native(VM* vm, NativeFn fn, u16 argc);
+
+// heap dispatch helpers (used in string, array, object, and later tables too)
+// coerce a register holding U64 or I64 to a C recognized u64, throws TYPE_MISMATCH
+#define COERCE_U64(vm, reg, out) do { \
+    if ((vm)->regs->types[(reg)] == U64)            \
+        (out) = (vm)->regs->payloads[(reg)].u;      \
+                                                    \
+    else if ((vm)->regs->types[(reg)] == I64)       \
+        (out) = (u64)(vm)->regs->payloads[(reg)].i; \
+                                                    \
+    else {                                          \
+        (vm)->panic_code = PANIC_TYPE_MISMATCH;     \
+        return false;                               \
+    } \
+} while (0)
+
+// extract heap ref from register, validate OBJ and heap type, then dereference typed pointer
+#define DEREF_HEAP(vm, reg, HTYPE, CTYPE, out) do { \
+    if ((vm)->regs->types[(reg)] != OBJ) { \
+        (vm)->panic_code = PANIC_TYPE_MISMATCH; return false; \
+    } \
+    \
+    HeapRef _href; \
+    memcpy(&_href, &(vm)->regs->payloads[(reg)], sizeof(HeapRef)); \
+    if (heapref_type(_href) != (HTYPE)) { \
+        (vm)->panic_code = PANIC_TYPE_MISMATCH; return false; \
+    } \
+    \
+    (out) = (CTYPE*)heap_deref(&(vm)->heap, _href); \
+    if (LIKELYFALSE(!(out))) { (vm)->panic_code = PANIC_OOB; return false; } \
+} while (0)
+
+// check heap allocation result for an out of mem error, then store as type OBJ in the destination reg
+#define STORE_HEAP_RESULT(vm, dest, ref) do { \
+    if (LIKELYFALSE((ref) == HEAP_REF_NULL)) { \
+        (vm)->panic_code = PANIC_OOM; return false; \
+    } \
+    \
+    (vm)->regs->types[(dest)] = OBJ; \
+    memcpy(&(vm)->regs->payloads[(dest)], &(ref), sizeof(HeapRef)); \
+} while (0)
 
 // helper for implicit falsiness
 // TODO: decide on forcing all comparisons to bool or treating bool as 0 and everything else as true. 

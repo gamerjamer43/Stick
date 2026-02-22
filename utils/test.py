@@ -39,7 +39,7 @@ class Opcode(IntEnum):
     NEWARR = auto(); NEWTABLE = auto(); NEWOBJ = auto()
     GETELEM = auto(); SETELEM = auto()
     ARRGET = auto(); ARRSET = auto(); ARRLEN = auto()
-    CONCAT = auto(); STRLEN = auto()
+    CONCAT = auto(); STRLEN = auto(); NEWSTR = auto()
 
     # conversions
     I2D = auto(); I2F = auto(); D2I = auto(); F2I = auto(); I2U = auto(); U2I = auto()
@@ -104,6 +104,23 @@ def JMPIF(r, off):      return ins(Opcode.JMPIF, r, 0, off)
 def JMPIFZ(r, off):     return ins(Opcode.JMPIFZ, r, 0, off)
 def BIN(op, dst, a, b): return ins(op, dst, a, b)
 def UN(op, r):          return ins(op, r)
+
+# heap / array / string helpers
+def NEWARR(dst, elem_type, cap_reg): return ins(Opcode.NEWARR, dst, int(elem_type), cap_reg)
+def ARRGET(dst, arr, idx):           return ins(Opcode.ARRGET, dst, arr, idx)
+def ARRSET(arr, idx, val):           return ins(Opcode.ARRSET, arr, idx, val)
+def ARRLEN(dst, arr):                return ins(Opcode.ARRLEN, dst, arr)
+def STRLEN_OP(dst, src):             return ins(Opcode.STRLEN, dst, src)
+def CONCAT_OP(dst, a, b):           return ins(Opcode.CONCAT, dst, a, b)
+
+def NEWSTR_WORDS(dest, s: bytes) -> list:
+    """pack NEWSTR instruction + inline data words for a raw byte string"""
+    length = len(s)
+    padded = s + b'\x00' * ((4 - length % 4) % 4)
+    words = [ins(Opcode.NEWSTR, dest, (length >> 8) & 0xFF, length & 0xFF)]
+    for i in range(0, len(padded), 4):
+        words.append(int.from_bytes(padded[i:i+4], 'little'))
+    return words
 
 # test model
 @dataclass(frozen=True)
@@ -434,6 +451,124 @@ TESTS += [
         LOADI(0, 123), ins(Opcode.RET, 0)         # func B returns 123
     ], consts=(func(5, 0, 4), func(7, 0, 4))),
 ]
+
+
+# array operations
+# create an array of I64s, use arrset to set index 0 to 42, 
+# check by using arrget and comparing equality
+TESTS.append(pass_if_truthy(Opcode.ARRGET, "arrget_basic", [
+    LOADI(0, 4),                             # r0 = 4 (capacity)
+    NEWARR(1, Type.I64, 0),                  # r1 = new array[I64](cap=r0)
+    LOADI(2, 42),                            # r2 = 42
+    LOADI(3, 0),                             # r3 = 0 (index)
+    ARRSET(1, 3, 2),                         # arr[0] = 42
+    ARRGET(4, 1, 3),                         # r4 = arr[0]
+    BIN(Opcode.EQ, 5, 4, 2),                 # r5 = (r4 == r2)
+], 5))
+
+# try to get an i64 at a non-zero (but valid) index using arrget
+TESTS.append(pass_if_truthy(Opcode.ARRGET, "arrget_index1", [
+    LOADI(0, 4),
+    NEWARR(1, Type.I64, 0),
+    LOADI(2, 10), LOADI(3, 0), ARRSET(1, 3, 2),   # arr[0] = 10
+    LOADI(2, 20), LOADI(3, 1), ARRSET(1, 3, 2),   # arr[1] = 20
+    LOADI(3, 1), ARRGET(4, 1, 3),                 # r4 = arr[1]
+    LOADI(5, 20), BIN(Opcode.EQ, 6, 4, 5),        # r6 = (r4 == 20)
+], 6))
+
+# set a value using arrset and read it back (uses truthiness which may be removed)
+TESTS.append(pass_if_truthy(Opcode.ARRSET, "arrset_basic", [
+    LOADI(0, 4),
+    NEWARR(1, Type.I64, 0),
+    LOADI(2, 99),
+    LOADI(3, 0),
+    ARRSET(1, 3, 2),                          # arr[0] = 99
+    ARRGET(4, 1, 3),                          # r4 = arr[0]
+], 4))
+
+# write multiple elements using arrset
+TESTS.append(pass_if_truthy(Opcode.ARRSET, "arrset_multi", [
+    LOADI(0, 8),
+    NEWARR(1, Type.I64, 0),
+    LOADI(2, 7),  LOADI(3, 0), ARRSET(1, 3, 2),   # arr[0] = 7
+    LOADI(2, 13), LOADI(3, 1), ARRSET(1, 3, 2),   # arr[1] = 13
+    LOADI(2, 21), LOADI(3, 2), ARRSET(1, 3, 2),   # arr[2] = 21
+    LOADI(3, 2), ARRGET(4, 1, 3),                 # r4 = arr[2]
+    LOADI(5, 21), BIN(Opcode.EQ, 6, 4, 5),        # r6 = (r4 == 21)
+], 6))
+
+# set 3 elements, ensure len = 3 with arrlen
+TESTS.append(pass_if_truthy(Opcode.ARRLEN, "arrlen_basic", [
+    LOADI(0, 8),                             # r0 = 8 (capacity)
+    NEWARR(1, Type.I64, 0),                  # arr
+    LOADI(2, 10),                            # value
+    LOADI(3, 0), ARRSET(1, 3, 2),            # arr[0] = 10
+    LOADI(3, 1), ARRSET(1, 3, 2),            # arr[1] = 10
+    LOADI(3, 2), ARRSET(1, 3, 2),            # arr[2] = 10
+    ARRLEN(4, 1),                            # r4 = length(arr) = 3
+    LOADC(5, 0),                             # r5 = u64(3)
+    BIN(Opcode.EQ_U, 6, 4, 5),               # r6 = (r4 == r5)
+], 6, consts=(u64(3),)))
+
+# double check that empty array has length 0
+TESTS.append(pass_if_zero(Opcode.ARRLEN, "arrlen_empty", [
+    LOADI(0, 4),
+    NEWARR(1, Type.I64, 0),
+    ARRLEN(2, 1),                            # r2 = length(arr) = 0
+], 2))
+
+
+# string operations
+# create "hello" and verify len = 5 with newstr and strlen
+TESTS.append(pass_if_truthy(Opcode.NEWSTR, "newstr_basic", [
+    *NEWSTR_WORDS(0, b"hello"),              # r0 = "hello"
+    STRLEN_OP(1, 0),                         # r1 = strlen(r0) = 5
+    LOADC(2, 0),                             # r2 = u64(5)
+    BIN(Opcode.EQ_U, 3, 1, 2),               # r3 = (r1 == r2)
+], 3, consts=(u64(5),)))
+
+# newstr with one char (may add short strings but this is more overhead)
+TESTS.append(pass_if_truthy(Opcode.NEWSTR, "newstr_single_char", [
+    *NEWSTR_WORDS(0, b"X"),                  # r0 = "X"
+    STRLEN_OP(1, 0),
+    LOADC(2, 0),
+    BIN(Opcode.EQ_U, 3, 1, 2),
+], 3, consts=(u64(1),)))
+
+# create "world!" and make sure len is 6
+TESTS.append(pass_if_truthy(Opcode.STRLEN, "strlen_basic", [
+    *NEWSTR_WORDS(0, b"world!"),             # r0 = "world!"
+    STRLEN_OP(1, 0),                         # r1 = strlen(r0) = 6
+    LOADC(2, 0),
+    BIN(Opcode.EQ_U, 3, 1, 2),
+], 3, consts=(u64(6),)))
+
+# double check empty string has length 0
+TESTS.append(pass_if_zero(Opcode.STRLEN, "strlen_empty", [
+    *NEWSTR_WORDS(0, b""),                   # r0 = ""
+    STRLEN_OP(1, 0),                         # r1 = 0
+], 1))
+
+# join "hi" + " guys" and make sure strlen is properly 7
+TESTS.append(pass_if_truthy(Opcode.CONCAT, "concat_basic", [
+    *NEWSTR_WORDS(0, b"hi"),                # r0 = "hi"
+    *NEWSTR_WORDS(1, b" guys"),             # r1 = " guys"
+    CONCAT_OP(2, 0, 1),                     # r2 = "hi guys"
+    STRLEN_OP(3, 2),                        # r3 = strlen(r2) = 6
+    LOADC(4, 0),                            # r4 = u64(6)
+    BIN(Opcode.EQ_U, 5, 3, 4),              # r5 = (r3 == r4) (check)
+], 5, consts=(u64(6),)))
+
+# make sure a concat with an empty string doesnt fuck w length
+TESTS.append(pass_if_truthy(Opcode.CONCAT, "concat_empty_rhs", [
+    *NEWSTR_WORDS(0, b"test"),              # r0 = "test"
+    *NEWSTR_WORDS(1, b""),                  # r1 = ""
+    CONCAT_OP(2, 0, 1),                     # r2 = "test"
+    STRLEN_OP(3, 2),                        # r3 = strlen(r2) = 4
+    LOADC(4, 0),
+    BIN(Opcode.EQ_U, 5, 3, 4),              # (same check as above)
+], 5, consts=(u64(4),)))
+
 
 # ensure dir then run each test inside
 def main() -> None:

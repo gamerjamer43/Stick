@@ -666,6 +666,189 @@ bool vm_run(VM* vm) {
                 break;
             }
 
+            case NEWARR: {
+                u32 dest = op_a(ins) + vm->current->base;
+                u8  elem_type = op_b(ins);
+                u32 cap_reg = op_c(ins) + vm->current->base;
+
+                if (LIKELYFALSE(!ensure_regs(vm, (dest > cap_reg ? dest : cap_reg) + 1))) return false;
+
+                // must be a u64 or i64 (which can be coerced)
+                u64 cap;
+                COERCE_U64(vm, cap_reg, cap);
+
+                // allocate on heap and store its HeapRef as OBJ @ dest
+                HeapRef ref = heap_alloc_array(&vm->heap, elem_type, (u32)cap);
+                STORE_HEAP_RESULT(vm, dest, ref);
+                break;
+            }
+
+            case ARRGET: {
+                u32 base = vm->current->base;
+                u32 dest    = op_a(ins) + base;
+                u32 arr_reg = op_b(ins) + base;  // src1 is where the array lives
+                u32 idx_reg = op_c(ins) + base;  // src2 is the index
+
+                // make sure no reaches are out of bounds with one simple check
+                u32 max = dest;
+                if (LIKELYFALSE(arr_reg > max)) max = arr_reg;
+                if (LIKELYFALSE(idx_reg > max)) max = idx_reg;
+                if (LIKELYFALSE(!ensure_regs(vm, max + 1))) return false;
+
+                // deref to access the actual array (will be done by bytecode verifier later)
+                HeapArray* arr;
+                DEREF_HEAP(vm, arr_reg, HEAP_TYPE_ARRAY, HeapArray, arr);
+
+                // index coercion (i64 or u64)
+                u64 idx;
+                COERCE_U64(vm, idx_reg, idx);
+
+                // ensure the array index isnt out of bounds either
+                if (LIKELYFALSE(idx >= arr->length)) { vm->panic_code = PANIC_OOB; return false; }
+
+                // read element into dest (and clear to avoid stale bs)
+                vm->regs->types[dest] = arr->elem_type;
+                vm->regs->payloads[dest].u = 0;
+                memcpy(&vm->regs->payloads[dest], (u8*)arr->data + idx * arr->elem_size, arr->elem_size);
+                break;
+            }
+
+            case ARRSET: {
+                u32 base = vm->current->base;
+
+                // src0 is the where the array lives, src1 is the index, 
+                // src2 is a 0-256 val of a register to copy in there
+                u32 arr_reg = op_a(ins) + base;
+                u32 idx_reg = op_b(ins) + base;
+                u32 val_reg = op_c(ins) + base;
+
+                // the rest is basically the same as above
+                u32 max = arr_reg;
+                if (idx_reg > max) max = idx_reg;
+                if (val_reg > max) max = val_reg;
+                if (LIKELYFALSE(!ensure_regs(vm, max + 1))) return false;
+
+                HeapArray* arr;
+                DEREF_HEAP(vm, arr_reg, HEAP_TYPE_ARRAY, HeapArray, arr);
+
+                // coerce index into a u64
+                u64 idx;
+                COERCE_U64(vm, idx_reg, idx);
+
+                // allow writes up to capacity (not just length)
+                if (LIKELYFALSE(idx >= arr->capacity)) { vm->panic_code = PANIC_OOB; return false; }
+
+                // value type must match element type
+                if (vm->regs->types[val_reg] != arr->elem_type) {
+                    vm->panic_code = PANIC_TYPE_MISMATCH;
+                    return false;
+                }
+
+                // write element and bump length if appending
+                memcpy((u8*)arr->data + idx * arr->elem_size, &vm->regs->payloads[val_reg], arr->elem_size);
+                if (idx + 1 > arr->length) arr->length = (u32)(idx + 1);
+                break;
+            }
+
+            case ARRLEN: {
+                u32 base = vm->current->base;
+                u32 dest    = op_a(ins) + base;
+                u32 arr_reg = op_b(ins) + base;
+
+                // TODO: bytecode verifier and get these checks the fuck out!
+                u32 max = dest > arr_reg ? dest : arr_reg;
+                if (LIKELYFALSE(!ensure_regs(vm, max + 1))) return false;
+
+                HeapArray* arr;
+                DEREF_HEAP(vm, arr_reg, HEAP_TYPE_ARRAY, HeapArray, arr);
+
+                // store array length in the destination register (and type properly)
+                vm->regs->types[dest] = U64;
+                vm->regs->payloads[dest].u = (u64)arr->length;
+                break;
+            }
+
+            case CONCAT: {
+                u32 dest, lhs, rhs;
+                if (!binop_indices(vm, ins, &dest, &lhs, &rhs)) return false;
+
+                // create 2 heap string pointers and deref
+                HeapString* sa;
+                HeapString* sb;
+                DEREF_HEAP(vm, lhs, HEAP_TYPE_STRING, HeapString, sa);
+                DEREF_HEAP(vm, rhs, HEAP_TYPE_STRING, HeapString, sb);
+
+                // build a concat buffer
+                u32 new_len = sa->length + sb->length;
+                char* buf = (char*)malloc(new_len + 1);
+                if (LIKELYFALSE(!buf)) { vm->panic_code = PANIC_OOM; return false; }
+
+                // copy both into the buffer at proper indices
+                memcpy(buf, sa->data, sa->length);
+                memcpy(buf + sa->length, sb->data, sb->length);
+                buf[new_len] = '\0';
+
+                // allocate a new string, then free the old buffer
+                HeapRef ref = heap_alloc_string(&vm->heap, buf, new_len);
+                free(buf);
+
+                // store and check for OOM w this nice helper
+                STORE_HEAP_RESULT(vm, dest, ref);
+                break;
+            }
+
+            case STRLEN: {
+                u32 base = vm->current->base;
+                u32 dest = op_a(ins) + base;
+                u32 src  = op_b(ins) + base;
+
+                u32 need = (dest > src ? dest : src) + 1;
+                if (LIKELYFALSE(!ensure_regs(vm, need))) return false;
+
+                // simple easy fun, deref string
+                HeapString* s;
+                DEREF_HEAP(vm, src, HEAP_TYPE_STRING, HeapString, s);
+
+                // store its type in specified dest reg (adjusted for base ofc) as U64
+                vm->regs->types[dest] = U64;
+                vm->regs->payloads[dest].u = (u64)s->length;
+                break;
+            }
+
+            case NEWSTR: {
+                u32 dest = op_a(ins) + vm->current->base;
+                u32 len  = (u32)op_unsigned_u16(ins);
+
+                if (LIKELYFALSE(!ensure_regs(vm, dest + 1))) return false;
+
+                // a bunch of 4 byte words follow this instruction with info on the string
+                u32 nwords = (len + 3) / 4;
+                if (LIKELYFALSE(vm->ip + nwords > vm->icount)) {
+                    vm->panic_code = PANIC_OOB;
+                    return false;
+                }
+
+                // read those bytes from istream
+                char* buf = (char*)malloc(len + 1);
+                if (LIKELYFALSE(!buf)) { vm->panic_code = PANIC_OOM; return false; }
+
+                for (u32 i = 0; i < nwords; i++) {
+                    u32 word = vm->istream[vm->ip + i];
+                    u32 remaining = len - i * 4;
+                    u32 to_copy = remaining < 4 ? remaining : 4;
+                    memcpy(buf + i * 4, &word, to_copy);
+                }
+
+                // properly null term and adjust instruction pointer properly
+                buf[len] = '\0';
+                vm->ip += nwords;
+
+                HeapRef ref = heap_alloc_string(&vm->heap, buf, len);
+                free(buf);
+                STORE_HEAP_RESULT(vm, dest, ref);
+                break;
+            }
+
             // cast helpers
             case I2D: CAST_TYPED(I64, i, DOUBLE, d, (double)vm->regs->payloads[src].i); break;
             case I2F: CAST_TYPED(I64, i, FLOAT,  f, (float)vm->regs->payloads[src].i);  break;
@@ -792,9 +975,11 @@ int main(int argc, char const *argv[]) {
         exit(0);
     }
 
-    // init and load file (if failed free safely, return panic code or 1 if no code)
+    // init and load file
     VM vm;
     vm_init(&vm);
+
+    // if failed free safely, return panic code or 1 if no code
     if (!vm_load_file(&vm, path)) {
         printf("error loading %s, code: %u\n", path, vm.panic_code);
         vm_free(&vm);

@@ -43,6 +43,7 @@ typedef enum {
     RET,       // return to caller
 
     // bitwise (and also logical operators as bools make false 0)
+    // i dont feel like fucking w the order rn
     AND,       // bitwise and src1 by src2 and store in src0
     OR,        // bitwise or src1 by src2 and store in src0
     XOR,       // bitwise exclusive or src1 by src2 and store in src0
@@ -70,6 +71,7 @@ typedef enum {
     // strings
     CONCAT,    // dst = str(src1) + str(src2)
     STRLEN,    // dst = length(str) MAY REMOVE TO TREAT STRINGS AS ARRAYS OF CHARS
+    NEWSTR,    // dst = heap string from inlined bytes (the next ceil(len/4) words r all raw bytes)
 
     // conversions
     I2D,       // int to double. dst = (double)src1
