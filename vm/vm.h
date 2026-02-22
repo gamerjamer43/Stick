@@ -151,45 +151,32 @@ typedef struct Frame {
 
 
 // the big dawg
-// TODO: figure out ordering, cache time locality gets fucked because my layout lives on more than one line
-// fix: order most hot on the top, and make sure shit is aligned from large to small in 64 byte chunks
-// i can't believe this issue helped me understand cache but we ball!
 typedef struct VM {
-    // stream of instructions (and count)
-    const Instruction* istream;
-    u32    icount;
+    // ordering hot to cold
+    // hot up top
+    const Instruction* istream; // stream of instructions
+    Registers* regs;            // registers (gonna carve Frames via Frame.base as this is a flat array)
+    Frame* current;             // current frame we're pointing to
+    const Value* consts;        // constant pool (allocated at compile time)
 
-    // constant pooling (pulled from using LOADC)
-    const Value* consts;  // constant pool (allocated at compile time)
-    u32 constcount;       // length of pool
+    u32 ip;                     // instruction pointer
+    u32 icount;
+    u32 constcount;
+    u32 panic_code;             // last error/panic info
 
-    // instruction pointer
-    u32 ip;
+    // then warm
+    Frame* frames; // pointer to frame stack
+    Value* globals; // globals table (switching to hash but for rn this is ok)
+    Func** funcs; // functions (stored sep from registers for easier access, less register usage, and safer free)
 
-    // registers (gonna carve Frames via Frame.base as this is a flat array)
-    Registers* regs;
-
-    // functions (stored sep from registers for easier access, less register usage, and safer free)
-    Func** funcs;
-    u32    funccount;
-
-    // globals table (switching to hash but for rn this is ok)
-    Value* globals;
-    u32    globalcount;
-
-    // call stack
-    Frame* frames;
-    Frame* current;
     u32    framecount;  // current count
     u32    framecap;    // max that can be filled BEFORE A RESIZE. max TOTAL is 65536 (MAX_REGISTERS)
+    u32    globalcount;
+    u32    funccount;
 
-    // heap
-    Heap heap;
+    // touched by gc only, so coldest
+    Heap heap; // owned heap struct
 
-    // last error/panic info
-    u32 panic_code;
-
-    // heap/GC hooks coming later
 } VM;
 
 
