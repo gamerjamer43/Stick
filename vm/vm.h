@@ -141,7 +141,9 @@ typedef struct Frame {
 
 
 // the big dawg
-// TODO: figure out padding. some areas r padded but some arent so i'm concerned
+// TODO: figure out ordering, cache time locality gets fucked because my layout lives on more than one line
+// fix: order most hot on the top, and make sure shit is aligned from large to small in 64 byte chunks
+// i can't believe this issue helped me understand cache but we ball!
 typedef struct VM {
     // stream of instructions (and count)
     const Instruction* istream;

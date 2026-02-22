@@ -91,8 +91,7 @@ void vm_free(VM* vm) {
         vm->globalcount = 0;
     }
 
-    // reset non-owned fields to safe defaults. null out constant pool
-    // TODO: i am not freeing the constant pool. pissing memory
+    // free constant pool (cuz i made it owned now)
     if (vm->consts) {
         free((void*)vm->consts);
         vm->consts = NULL;
