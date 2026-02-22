@@ -281,29 +281,32 @@ I hope this creates for an interesting (and original) concept that gives you the
 - [x] CALL/RET tests (comes with the above)
 - [X] Type conversion ops (I2D, I2F, D2I, F2I)
 - [X] TCO and the TAILCALL opcode (force/rewrite where you can)
-
-### 🔨 Immediate
-- [ ] Make arithmetic operations work with any numeric type (avoid the need for unsigned operators) [DOUBLE CHECK THIS]
-- [ ] Unsigned ops (DIVU, MODU, GTU, GEU, LTU, LEU)
-- [ ] Figure out how to do stack strings/arrays. You can do this using 4 chars per register
+- [X] Make arithmetic operations work with any numeric type (MILD DEVIATION: operators are typed now)
+- [X] Unsigned ops (DIVU, MODU, GTU, GEU, LTU, LEU)
+- [X] Float/double arithmetic support (w the above)
+- [X] Heap allocation (NEWARR, NEWTABLE, NEWOBJ)
+- [X] Object access (GETELEM, SETELEM, ARRGET, ARRSET, ARRLEN)
+- [X] String operations (CONCAT, STRLEN)
+- [X] GC and hooks (finalizing a tri color, generational, bucketed bump GC. hopefully not too much overhead cuz allocs r quick, bucket allocs tho...)
 
 ### 🎯 High Priority
+- [ ] Figure out why strlen isn't working (too late for me rn)
+- [ ] Figure out how to do stack strings/arrays. You can do this using 4 chars per register but this is slow(ish)
 - [ ] Frontend compiler (Stick language → bytecode, handwriting a parser rn)
 - [ ] Native function registration API (relatively simple)
-- [ ] Float/double arithmetic support (fixed at u64 and i64 just for rn)
-
 
 ### 🧱 Core Features
-- [ ] Heap allocation (NEWARR, NEWTABLE, NEWOBJ)
-- [ ] Object access (GETELEM, SETELEM, ARRGET, ARRSET, ARRLEN)
-- [ ] String operations (CONCAT, STRLEN)
-- [ ] GC and hooks (never written one, may do Boehms)
+- [ ] Bytecode Verifier
+- [ ] Remove bounds checks (AFTER ABOVE)
+- [ ] Emitter! Start that shit!
+- [ ] Add more to this list... that brain is somewhere bud!
 
 ### 💫 Future
 - [ ] Debug info / source maps
-- [ ] Disassembler
-- [ ] REPL
-- [ ] JIT compilation (maybe)
+- [ ] Disassembler (doneish?)
+- [ ] Simple REPL (can be done thru the compiler)
+- [ ] Pre-compilation execution (after the above! better compile time safety, VM does less at runtime)
+- [ ] JIT compilation/VM opt layer (maybe)
 
 ## Contributing
 

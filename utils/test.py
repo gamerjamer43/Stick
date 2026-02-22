@@ -184,9 +184,21 @@ TESTS += [
         LOADC(0, 0), BIN(Opcode.I2F, 1, 0, 0), LOADC(2, 1), BIN(Opcode.EQ_F, 3, 1, 2)
     ], 3, consts=(i64(11), f32(11.0))),
 
+    # i2f should round at the f32 mantissa limit (2 to the 24)
+    pass_if_truthy(Opcode.I2F, "bonus_i2f_rounding", [
+        LOADC(0, 0), BIN(Opcode.I2F, 1, 0, 0),
+        LOADC(2, 1), BIN(Opcode.EQ_F, 3, 1, 2)
+    ], 3, consts=(i64(16777217), f32(16777216.0))),
+
     pass_if_truthy(Opcode.D2I, "d2i_basic", [
         LOADC(0, 0), BIN(Opcode.D2I, 1, 0, 0), LOADC(2, 1), BIN(Opcode.EQ, 3, 1, 2)
     ], 3, consts=(f64(42.0), i64(42))),
+
+    # d2i should always truncate to 0
+    pass_if_truthy(Opcode.D2I, "bonus_d2i_trunc", [
+        LOADC(0, 0), BIN(Opcode.D2I, 1, 0, 0),
+        LOADC(2, 1), BIN(Opcode.EQ, 3, 1, 2)
+    ], 3, consts=(f64(-3.7), i64(-3))),
 
     pass_if_truthy(Opcode.F2I, "f2i_basic", [
         LOADC(0, 0), BIN(Opcode.F2I, 1, 0, 0), LOADC(2, 1), BIN(Opcode.EQ, 3, 1, 2)
@@ -249,7 +261,13 @@ TESTS += [
     pass_if_truthy(Opcode.OR,  "or_basic",  [LOADI(0, 0b1010), LOADI(1, 0b0101), BIN(Opcode.OR, 2, 0, 1)], 2),
     pass_if_truthy(Opcode.XOR, "xor_basic", [LOADI(0, 0b1111), LOADI(1, 0b1010), BIN(Opcode.XOR, 2, 0, 1)], 2),
     pass_if_zero(Opcode.LNOT, "lnot_basic", [LOADC(0, 0), UN(Opcode.LNOT, 0)], 0, consts=(boolean(True),)),
+    # lnot false should be true (non-zero)
+    pass_if_truthy(Opcode.LNOT, "bonus_lnot_false", [LOADC(0, 0), UN(Opcode.LNOT, 0)], 0, consts=(boolean(False),)),
     pass_if_truthy(Opcode.BNOT, "bnot_basic", [LOADI(0, 0), UN(Opcode.BNOT, 0)], 0),
+    # bnot of 0 should be -1 (all bits set) for i64
+    pass_if_truthy(Opcode.BNOT, "bonus_bnot_neg_one", [
+        LOADI(0, 0), UN(Opcode.BNOT, 0), LOADC(1, 0), BIN(Opcode.EQ, 2, 0, 1)
+    ], 2, consts=(i64(-1),)),
 ]
 
 # bit shifts
@@ -275,6 +293,21 @@ TESTS += [
 
     # make sure loadi is signed
     TestCase(Opcode.LOADI, "bonus_loadi_negative", [LOADI(0, 0xFFFF), JMPIFZ(0, 1), HALT(), PANIC()]),
+
+    # jmpif should treat non-zeroes (including negative zero) as valid
+    TestCase(Opcode.JMPIF, "bonus_jmpif_negative_truthy", [
+        LOADI(0, 0xFFFF), JMPIF(0, 1), PANIC(), HALT()
+    ]),
+
+    # jmp forward more than one instruction
+    TestCase(Opcode.JMP, "bonus_jmp_skip_two", [
+        JMP(2), PANIC(), PANIC(), HALT()
+    ]),
+
+    # check loadi properly sign extends 0x8000 (-32768)
+    pass_if_truthy(Opcode.LOADI, "bonus_loadi_sign_min", [
+        LOADI(0, 0x8000), LOADC(1, 0), BIN(Opcode.EQ, 2, 0, 1)
+    ], 2, consts=(i64(-32768),)),
 ]
 
 # arithmetic op edge cases (over/underflow, negative vals, and * 0. should be supported)
@@ -323,6 +356,11 @@ TESTS += [
     pass_if_truthy(Opcode.GT_U, "gt_u_true", [
         LOADC(0, 0), LOADC(1, 1), BIN(Opcode.GT_U, 2, 0, 1)
     ], 2, consts=(u64(10), u64(2))),
+
+    # lil bonus: unsigned comparison should treat the higher bit values as larger than small numbers
+    pass_if_truthy(Opcode.GT_U, "bonus_gt_u_highbit", [
+        LOADC(0, 0), LOADC(1, 1), BIN(Opcode.GT_U, 2, 0, 1)
+    ], 2, consts=(u64(0x8000000000000000), u64(1))),
 
     pass_if_truthy(Opcode.LE_U, "le_u_true", [
         LOADC(0, 0), LOADC(1, 0), BIN(Opcode.LE_U, 2, 0, 1)
@@ -400,6 +438,13 @@ TESTS.append(pass_if_truthy(Opcode.STOREG, "bonus_globals_multi", [
     LOADG(2, 0), LOADG(3, 1),
     BIN(Opcode.ADD, 4, 2, 3)
 ], 4, consts=(i64(10), i64(20)), globs=(i64(0), i64(0))))
+
+# storeg should overwrite existing value at the same index
+TESTS.append(pass_if_truthy(Opcode.STOREG, "bonus_globals_overwrite", [
+    LOADC(0, 0), STOREG(0, 0),
+    LOADC(1, 1), STOREG(1, 0),
+    LOADG(2, 0), LOADC(3, 1), BIN(Opcode.EQ, 4, 2, 3)
+], 4, consts=(i64(1), i64(2)), globs=(i64(0),)))
 
 # chained arithmetic ops
 TESTS.append(pass_if_truthy(Opcode.ADD, "bonus_chained_arith", [
@@ -510,6 +555,13 @@ TESTS.append(pass_if_truthy(Opcode.ARRLEN, "arrlen_basic", [
     BIN(Opcode.EQ_U, 6, 4, 5),               # r6 = (r4 == r5)
 ], 6, consts=(u64(3),)))
 
+# arrlen should become index + 1 after setting a high index (resizes)
+TESTS.append(pass_if_truthy(Opcode.ARRLEN, "bonus_arrlen_gapped_set", [
+    LOADI(0, 8), NEWARR(1, Type.I64, 0),
+    LOADI(2, 5), LOADI(3, 4), ARRSET(1, 3, 2),  # arr[4] = 5
+    ARRLEN(4, 1), LOADC(5, 0), BIN(Opcode.EQ_U, 6, 4, 5)
+], 6, consts=(u64(5),)))
+
 # double check that empty array has length 0
 TESTS.append(pass_if_zero(Opcode.ARRLEN, "arrlen_empty", [
     LOADI(0, 4),
@@ -526,6 +578,18 @@ TESTS.append(pass_if_truthy(Opcode.NEWSTR, "newstr_basic", [
     LOADC(2, 0),                             # r2 = u64(5)
     BIN(Opcode.EQ_U, 3, 1, 2),               # r3 = (r1 == r2)
 ], 3, consts=(u64(5),)))
+
+# shouldn't ignore any nulls inside the string when doing length (cuz they arent the null term)
+TESTS.append(pass_if_truthy(Opcode.STRLEN, "bonus_newstr_embedded_null", [
+    *NEWSTR_WORDS(0, b"a\x00b"),
+    STRLEN_OP(1, 0), LOADC(2, 0), BIN(Opcode.EQ_U, 3, 1, 2)
+], 3, consts=(u64(3),)))
+
+# test newstr with exactly 4 bytes to check padding logic
+TESTS.append(pass_if_truthy(Opcode.STRLEN, "bonus_newstr_len4", [
+    *NEWSTR_WORDS(0, b"test"),
+    STRLEN_OP(1, 0), LOADC(2, 0), BIN(Opcode.EQ_U, 3, 1, 2)
+], 3, consts=(u64(4),)))
 
 # newstr with one char (may add short strings but this is more overhead)
 TESTS.append(pass_if_truthy(Opcode.NEWSTR, "newstr_single_char", [
@@ -549,15 +613,17 @@ TESTS.append(pass_if_zero(Opcode.STRLEN, "strlen_empty", [
     STRLEN_OP(1, 0),                         # r1 = 0
 ], 1))
 
+# TODO: figure out why it doesn't matter whether strlen is right or not...?
+# this passes whether the const is 6 or 7 (STOPPPPPPPPPPPPPPP)
 # join "hi" + " guys" and make sure strlen is properly 7
 TESTS.append(pass_if_truthy(Opcode.CONCAT, "concat_basic", [
     *NEWSTR_WORDS(0, b"hi"),                # r0 = "hi"
     *NEWSTR_WORDS(1, b" guys"),             # r1 = " guys"
     CONCAT_OP(2, 0, 1),                     # r2 = "hi guys"
-    STRLEN_OP(3, 2),                        # r3 = strlen(r2) = 6
-    LOADC(4, 0),                            # r4 = u64(6)
+    STRLEN_OP(3, 2),                        # r3 = strlen(r2) = 7
+    LOADC(4, 0),                            # r4 = u64(7)
     BIN(Opcode.EQ_U, 5, 3, 4),              # r5 = (r3 == r4) (check)
-], 5, consts=(u64(6),)))
+], 5, consts=(u64(7),)))
 
 # make sure a concat with an empty string doesnt fuck w length
 TESTS.append(pass_if_truthy(Opcode.CONCAT, "concat_empty_rhs", [
@@ -568,6 +634,13 @@ TESTS.append(pass_if_truthy(Opcode.CONCAT, "concat_empty_rhs", [
     LOADC(4, 0),
     BIN(Opcode.EQ_U, 5, 3, 4),              # (same check as above)
 ], 5, consts=(u64(4),)))
+
+# concat with empty lhs should preserve rhs length
+TESTS.append(pass_if_truthy(Opcode.CONCAT, "bonus_concat_empty_lhs", [
+    *NEWSTR_WORDS(0, b""), *NEWSTR_WORDS(1, b"abc"),
+    CONCAT_OP(2, 0, 1), STRLEN_OP(3, 2),
+    LOADC(4, 0), BIN(Opcode.EQ_U, 5, 3, 4)
+], 5, consts=(u64(3),)))
 
 
 # ensure dir then run each test inside

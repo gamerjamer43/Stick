@@ -80,7 +80,7 @@ def format_instr(idx: int, word: int) -> str:
         return f"{idx:04d}: {raw}  {name} r{a}"
     
     # fallback
-    return f"{idx:04d}: {raw}  {name} a={a} b={b} c={c}"
+    return f"{idx:04d}: {raw}  {name} {a} {b} {c}"
 
 # decode something in a constant slot
 def decode_const(data: bytes) -> str:
