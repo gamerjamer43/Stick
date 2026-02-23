@@ -1,6 +1,5 @@
-#![allow(dead_code, unused_variables)]
+// uncomment when this inevitably becomes a problem again #![allow(dead_code, unused_variables)]
 
-use core::fmt;
 use std::{mem::take, ops::Range, process::exit, time::Instant};
 
 use super::ast::*;
@@ -122,310 +121,280 @@ impl<'src, 't> Parser<'src, 't> {
         Some(tok)
     }
 
-    // TODO: add plain ranges. val = 1..3
-    // TODO 2: add dest and type based decls. decide i64 int = 1 or let int: i64 = 1 and const, global, maybe static too: const i64 int = 1 or let const int: i64 = 1
-    // TODO 3: make semicolons OPTIONAL at the end of a line (or to end a statement)
     #[inline]
-    fn parse_expr(&mut self, min: u8) -> Expr<'src> {
-        // check for anything before
-        let mut left: Expr<'_> = self.parse_prefix();
+    /// skip all newlines following a statement
+    fn eat_newlines(&mut self) {
+        while self.matches(&Token::Newline) {
+            self.advance();
+        }
+    }
 
-        // get the token into scope
-        while let Some(tok) = self.cur() {
-            let tok: &Token<'_> = match self.cur() {
-                Some(tok) => tok,
-                None => {
-                    println!("not implemented: {tok:?}");
-                    return Expr::Unknown;
+    #[inline]
+    // skip any delimiter between a statement (i need to fix this to avoid semicolon spam)
+    fn eat_stmt_delimiters(&mut self) {
+        while self.matches_any(&[Token::Newline, Token::Semicolon]) {
+            self.advance();
+        }
+    }
+
+    #[inline]
+    /// parse if we havent reached one of the listed stops (prototypes vs declarations)
+    fn parse_optional_expr_until(&mut self, stops: &[Token<'src>]) -> Option<Box<Expr<'src>>> {
+        if self.matches_any(stops) {
+            None
+        } else {
+            Some(Box::new(self.parse_expr(0)))
+        }
+    }
+
+    fn parse_call_args(&mut self) -> Vec<Expr<'src>> {
+        let mut args = Vec::with_capacity(8);
+        if !self.matches(&Token::RParen) {
+            args.push(self.parse_expr(0));
+
+            while self.matches(&Token::Comma) {
+                self.advance();
+                args.push(self.parse_expr(0));
+                if self.matches(&Token::RParen) {
+                    break;
                 }
-            };
+            }
 
-            // indexing/fields r highest precedence
-            let precedence: u8 = match tok {
+            if !self.matches(&Token::RParen) {
+                self.error(Parse(MissingExpected(
+                    "expected ',' or ')' in call. have to add this to the error system",
+                )));
+            }
+        }
+
+        args
+    }
+
+    fn parse_subscript(&mut self) -> Subscript<'src> {
+        if self.matches(&Token::DotDot) {
+            self.advance();
+            let end = self.parse_optional_expr_until(&[Token::RBracket]);
+            return Subscript::Range { start: None, end };
+        }
+
+        let start = self.parse_expr(0);
+        if self.matches(&Token::DotDot) {
+            self.advance();
+            let end = self.parse_optional_expr_until(&[Token::RBracket]);
+            Subscript::Range {
+                start: Some(Box::new(start)),
+                end,
+            }
+        } else {
+            Subscript::Index(Box::new(start))
+        }
+    }
+
+    fn postfix_precedence(&self) -> u8 {
+        match self.cur() {
+            Some(
                 Token::LParen
                 | Token::LBracket
                 | Token::Dot
                 | Token::Arrow
                 | Token::PlusPlus
-                | Token::MinusMinus => 15,
+                | Token::MinusMinus,
+            ) => 15,
+            _ => 0,
+        }
+    }
 
-                _ => 0,
+    fn apply_postfix(&mut self, left: &mut Expr<'src>) {
+        let current = std::mem::replace(left, Expr::Unknown);
+
+        if self.matches(&Token::LParen) {
+            self.advance();
+            let args = self.parse_call_args();
+            self.expect_msg(
+                |t: &Token<'_>| matches!(t, Token::RParen),
+                "expected ')' to close function call",
+            );
+
+            *left = match current {
+                Expr::Field { obj, name } => Expr::Method {
+                    receiver: obj,
+                    method: name,
+                    args,
+                },
+                other => Expr::Call {
+                    func: Box::new(other),
+                    args,
+                },
+            };
+            return;
+        }
+
+        if self.matches_any(&[Token::Dot, Token::Arrow]) {
+            self.advance();
+            let name = match self.advance() {
+                Some(Token::Identifier(name)) => name,
+                _ => {
+                    self.error(Parse(MissingExpected(
+                        "expected identifier after field access operator",
+                    )));
+                    *left = Expr::Unknown;
+                    return;
+                }
             };
 
-            // oh this nesting makes me keel
+            *left = Expr::Field {
+                obj: Box::new(current),
+                name: Ident(name),
+            };
+            return;
+        }
+
+        if self.matches(&Token::LBracket) {
+            self.advance();
+            let sub = self.parse_subscript();
+            self.expect_msg(|t: &Token<'_>| matches!(t, Token::RBracket), "missing ']'");
+            *left = Expr::Index {
+                obj: Box::new(current),
+                sub,
+            };
+            return;
+        }
+
+        if self.matches(&Token::PlusPlus) {
+            self.advance();
+            *left = Expr::Unary {
+                op: UnaryOp::PostInc,
+                expr: Box::new(current),
+            };
+            return;
+        }
+
+        if self.matches(&Token::MinusMinus) {
+            self.advance();
+            *left = Expr::Unary {
+                op: UnaryOp::PostDec,
+                expr: Box::new(current),
+            };
+            return;
+        }
+
+        *left = current;
+    }
+
+    fn infix_op(&self) -> Option<(u8, InfixKind)> {
+        let tok = self.cur()?;
+
+        Some(match tok {
+            Token::PlusEq => (0, InfixKind::Assign(AssignOp::PlusEq)),
+            Token::MinusEq => (0, InfixKind::Assign(AssignOp::MinusEq)),
+            Token::StarEq => (0, InfixKind::Assign(AssignOp::StarEq)),
+            Token::SlashEq => (0, InfixKind::Assign(AssignOp::SlashEq)),
+            Token::PercentEq => (0, InfixKind::Assign(AssignOp::PercentEq)),
+            Token::AndEq => (0, InfixKind::Assign(AssignOp::AndEq)),
+            Token::OrEq => (0, InfixKind::Assign(AssignOp::OrEq)),
+            Token::XorEq => (0, InfixKind::Assign(AssignOp::XorEq)),
+            Token::ShlEq => (0, InfixKind::Assign(AssignOp::ShlEq)),
+            Token::ShrEq => (0, InfixKind::Assign(AssignOp::ShrEq)),
+            Token::LogicalOr => (1, InfixKind::Binary(BinOp::Or)),
+            Token::LogicalAnd => (2, InfixKind::Binary(BinOp::And)),
+            Token::BitOr => (3, InfixKind::Binary(BinOp::BitOr)),
+            Token::BitXor => (4, InfixKind::Binary(BinOp::BitXor)),
+            Token::BitAnd => (5, InfixKind::Binary(BinOp::BitAnd)),
+            Token::EqEq => (6, InfixKind::Binary(BinOp::Eq)),
+            Token::NotEq => (6, InfixKind::Binary(BinOp::NotEq)),
+            Token::Less => (7, InfixKind::Binary(BinOp::Less)),
+            Token::LessEq => (7, InfixKind::Binary(BinOp::LessEq)),
+            Token::Greater => (7, InfixKind::Binary(BinOp::Greater)),
+            Token::GreaterEq => (7, InfixKind::Binary(BinOp::GreaterEq)),
+            Token::Assign => (0, InfixKind::Assign(AssignOp::Assign)),
+            Token::Shl => (8, InfixKind::Binary(BinOp::Shl)),
+            Token::Shr => (8, InfixKind::Binary(BinOp::Shr)),
+            Token::Plus => (9, InfixKind::Binary(BinOp::Add)),
+            Token::Minus => (9, InfixKind::Binary(BinOp::Sub)),
+            Token::Star => (10, InfixKind::Binary(BinOp::Mul)),
+            Token::Slash => (10, InfixKind::Binary(BinOp::Div)),
+            Token::Percent => (10, InfixKind::Binary(BinOp::Mod)),
+            Token::StarStar => (11, InfixKind::Binary(BinOp::Power)),
+            _ => return None,
+        })
+    }
+
+    fn assign_lhs(&mut self, expr: Expr<'src>) -> Option<LeftSide<'src>> {
+        match expr {
+            Expr::Ident(ident) => Some(LeftSide::Var(ident)),
+            Expr::Field { obj, name } => Some(LeftSide::Field { obj, name }),
+            Expr::Index { obj, sub } => Some(LeftSide::Subscript { obj, sub }),
+            _ => {
+                self.error(Parse(MissingExpected(
+                    "left side of assignment must be identifier, field, or index",
+                )));
+                None
+            }
+        }
+    }
+
+    #[inline]
+    fn parse_expr(&mut self, min: u8) -> Expr<'src> {
+        let mut left = self.parse_prefix();
+
+        while self.cur().is_some() {
+            let precedence = self.postfix_precedence();
             if precedence != 0 && precedence >= min {
-                match tok {
-                    // function calls
-                    Token::LParen => {
-                        self.advance();
-
-                        // TODO: turn this into self.eat_args()
-                        // eat as many args as possible. default to take 8 before resizing then its ur problem lmao
-                        let mut args: Vec<Expr<'_>> = Vec::with_capacity(8);
-                        if !self.matches(&Token::RParen) {
-                            args.push(self.parse_expr(0));
-
-                            // match commas (and ending parenthesis)
-                            while self.matches(&Token::Comma) {
-                                self.advance();
-
-                                // evaluate THEN push
-                                args.push(self.parse_expr(0));
-                                if self.matches(&Token::RParen) {
-                                    break;
-                                }
-                            }
-
-                            // malformed calls
-                            if !self.matches(&Token::RParen) {
-                                self.error(
-                                    Parse(MissingExpected("expected ',' or ')' in call. have to add this to the error system"))
-                                );
-                            }
-                        }
-
-                        // expect r paren
-                        self.expect_msg(
-                            |t: &Token<'_>| matches!(t, Token::RParen),
-                            "expected ')' to close function call",
-                        );
-
-                        // method calls exist, so there's a match here
-                        left = match left {
-                            Expr::Field { obj, name } => Expr::Method {
-                                receiver: obj,
-                                method: name,
-                                args,
-                            },
-
-                            // also boxing to avoid infinite recursive eval
-                            other => Expr::Call {
-                                func: Box::new(other),
-                                args,
-                            },
-                        };
-                    }
-
-                    // TODO: discriminate dot vs arrow
-                    Token::Dot | Token::Arrow => {
-                        self.advance();
-
-                        // fields r simple just should be one identifier
-                        let name = match self.advance() {
-                            Some(Token::Identifier(name)) => name,
-                            _ => {
-                                println!("not implemented: {tok:?}");
-                                return Expr::Unknown;
-                            }
-                        };
-
-                        let lvalue: Box<Expr<'_>> = Box::new(left);
-                        left = Expr::Field {
-                            obj: lvalue,
-                            name: Ident(name),
-                        };
-                    }
-
-                    // slices/index
-                    Token::LBracket => {
-                        self.advance();
-
-                        // slices are denoted [start..end], [start..] or [..end]
-                        let sub: Subscript<'_> = if self.matches(&Token::DotDot) {
-                            self.advance();
-
-                            // match the end bracket or error
-                            let end: Option<Box<Expr<'_>>> = if !self.matches(&Token::RBracket) {
-                                Some(Box::new(self.parse_expr(0)))
-                            } else {
-                                None
-                            };
-
-                            Subscript::Range { start: None, end }
-                        } else {
-                            // otherwise try and evaluate out whatever is inside, start then end
-                            let start: Expr<'_> = self.parse_expr(0);
-                            if self.matches(&Token::DotDot) {
-                                self.advance();
-
-                                // if nothing matches its [i..]
-                                let end: Option<Box<Expr<'_>>> = if !self.matches(&Token::RBracket)
-                                {
-                                    Some(Box::new(self.parse_expr(0)))
-                                } else {
-                                    None
-                                };
-
-                                Subscript::Range {
-                                    start: Some(Box::new(start)),
-                                    end,
-                                }
-                            }
-                            // NOW we know it's an index
-                            else {
-                                Subscript::Index(Box::new(start))
-                            }
-                        };
-
-                        // expect an ending bracket
-                        self.expect_msg(
-                            |t: &Token<'_>| matches!(t, Token::RBracket),
-                            "missing ']'",
-                        );
-
-                        let lvalue: Box<Expr<'_>> = Box::new(left);
-                        left = Expr::Index { obj: lvalue, sub };
-                    }
-
-                    // postfix increment/decrement
-                    Token::PlusPlus => {
-                        self.advance();
-                        left = Expr::Unary {
-                            op: UnaryOp::PostInc,
-                            expr: Box::new(left),
-                        };
-                    }
-
-                    Token::MinusMinus => {
-                        self.advance();
-                        left = Expr::Unary {
-                            op: UnaryOp::PostDec,
-                            expr: Box::new(left),
-                        };
-                    }
-
-                    // never hits if this hits ur dumb
-                    _ => unreachable!("how. this is in parse expr as part of the indexing/slicing"),
-                }
-
+                self.apply_postfix(&mut left);
                 continue;
             }
 
-            // normal ops
-            let (op_prec, op) = match tok {
-                // assignment always last trump
-                Token::PlusEq => (0, InfixKind::Assign(AssignOp::PlusEq)),
-                Token::MinusEq => (0, InfixKind::Assign(AssignOp::MinusEq)),
-                Token::StarEq => (0, InfixKind::Assign(AssignOp::StarEq)),
-                Token::SlashEq => (0, InfixKind::Assign(AssignOp::SlashEq)),
-                Token::PercentEq => (0, InfixKind::Assign(AssignOp::PercentEq)),
-                Token::AndEq => (0, InfixKind::Assign(AssignOp::AndEq)),
-                Token::OrEq => (0, InfixKind::Assign(AssignOp::OrEq)),
-                Token::XorEq => (0, InfixKind::Assign(AssignOp::XorEq)),
-                Token::ShlEq => (0, InfixKind::Assign(AssignOp::ShlEq)),
-                Token::ShrEq => (0, InfixKind::Assign(AssignOp::ShrEq)),
+            if self.matches(&Token::DotDot) {
+                self.advance();
+                let end = self.parse_optional_expr_until(&[
+                    Token::LBrace,
+                    Token::Newline,
+                    Token::Semicolon,
+                    Token::RBracket,
+                    Token::RParen,
+                ]);
 
-                // logical/bitwise
-                Token::LogicalOr => (1, InfixKind::Binary(BinOp::Or)),
-                Token::LogicalAnd => (2, InfixKind::Binary(BinOp::And)),
-                Token::BitOr => (3, InfixKind::Binary(BinOp::BitOr)),
-                Token::BitXor => (4, InfixKind::Binary(BinOp::BitXor)),
-                Token::BitAnd => (5, InfixKind::Binary(BinOp::BitAnd)),
-                Token::EqEq => (6, InfixKind::Binary(BinOp::Eq)),
-                Token::NotEq => (6, InfixKind::Binary(BinOp::NotEq)),
+                left = Expr::Range {
+                    start: Some(Box::new(left)),
+                    end,
+                };
+                continue;
+            }
 
-                // comparators
-                Token::Less | Token::LessEq | Token::Greater | Token::GreaterEq => match tok {
-                    Token::Less => (7, InfixKind::Binary(BinOp::Less)),
-                    Token::LessEq => (7, InfixKind::Binary(BinOp::LessEq)),
-                    Token::Greater => (7, InfixKind::Binary(BinOp::Greater)),
-                    Token::GreaterEq => (7, InfixKind::Binary(BinOp::GreaterEq)),
-                    _ => unreachable!("what"),
-                },
-
-                // then comes assign its first match
-                Token::Assign => (0, InfixKind::Assign(AssignOp::Assign)),
-
-                // bit shifts
-                Token::Shl | Token::Shr => match tok {
-                    Token::Shl => (8, InfixKind::Binary(BinOp::Shl)),
-                    Token::Shr => (8, InfixKind::Binary(BinOp::Shr)),
-                    _ => unreachable!("huh"),
-                },
-
-                // AS
-                Token::Plus | Token::Minus => match tok {
-                    Token::Plus => (9, InfixKind::Binary(BinOp::Add)),
-                    Token::Minus => (9, InfixKind::Binary(BinOp::Sub)),
-                    _ => unreachable!("what the helly"),
-                },
-
-                // MD (m = mult AND modulo)
-                Token::Star | Token::Slash | Token::Percent => match tok {
-                    Token::Star => (10, InfixKind::Binary(BinOp::Mul)),
-                    Token::Slash => (10, InfixKind::Binary(BinOp::Div)),
-                    Token::Percent => (10, InfixKind::Binary(BinOp::Mod)),
-                    _ => unreachable!("what the helliante"),
-                },
-
-                // E
-                Token::StarStar => (11, InfixKind::Binary(BinOp::Power)),
-
-                // range operator is always lower than normal arithmetic
-                Token::DotDot => {
-                    self.advance();
-
-                    // parse end of range if present (not followed by { or delimiter)
-                    let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[
-                        Token::LBrace,
-                        Token::Newline,
-                        Token::Semicolon,
-                        Token::RBracket,
-                        Token::RParen,
-                    ]) {
-                        Some(Box::new(self.parse_expr(0)))
-                    } else {
-                        None
-                    };
-
-                    left = Expr::Range {
-                        start: Some(Box::new(left)),
-                        end,
-                    };
-                    continue;
-                }
-
-                // erm
-                _ => break,
+            let (op_prec, op) = match self.infix_op() {
+                Some(op) => op,
+                None => break,
             };
 
-            // let higher precedence ops finish first
             if op_prec < min {
                 break;
             }
             self.advance();
 
-            match op {
+            left = match op {
                 InfixKind::Assign(aop) => {
-                    // assignments come last. otherwise left assoc
-                    let rhs: Expr<'_> = self.parse_expr(op_prec);
-
-                    let lhs = match left {
-                        Expr::Ident(ident) => LeftSide::Var(ident),
-                        Expr::Field { obj, name } => LeftSide::Field { obj, name },
-                        Expr::Index { obj, sub } => LeftSide::Subscript { obj, sub },
-                        _ => {
-                            println!("not implemented: or something went wrong {tok:?}");
-                            return Expr::Unknown;
-                        }
+                    let rhs = self.parse_expr(op_prec);
+                    let lhs = match self.assign_lhs(left) {
+                        Some(lhs) => lhs,
+                        None => return Expr::Unknown,
                     };
 
-                    left = Expr::Assign {
+                    Expr::Assign {
                         op: aop,
                         lhs,
                         rhs: Box::new(rhs),
-                    };
+                    }
                 }
 
                 InfixKind::Binary(bop) => {
-                    let rhs: Expr<'_> = self.parse_expr(op_prec + 1);
-                    left = Expr::Binary {
+                    let rhs = self.parse_expr(op_prec + 1);
+                    Expr::Binary {
                         op: bop,
                         lhs: Box::new(left),
                         rhs: Box::new(rhs),
-                    };
+                    }
                 }
-            }
+            };
         }
 
         left
@@ -442,13 +411,11 @@ impl<'src, 't> Parser<'src, 't> {
             Some(Token::DotDot) => {
                 self.advance();
 
-                // parse end if present
-                let end: Option<Box<Expr<'_>>> =
-                    if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon]) {
-                        Some(Box::new(self.parse_expr(0)))
-                    } else {
-                        None
-                    };
+                let end = self.parse_optional_expr_until(&[
+                    Token::LBrace,
+                    Token::Newline,
+                    Token::Semicolon,
+                ]);
 
                 Pattern::Range { start: None, end }
             }
@@ -483,7 +450,6 @@ impl<'src, 't> Parser<'src, 't> {
     }
 
     fn parse_func(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
-        // TODO replace the many expect calls with self.error this is the only way it was workin
         self.advance();
         let name = match self.expect(|t| matches!(t, Token::Identifier(_))) {
             Some(Token::Identifier(name)) => Ident(name),
@@ -503,12 +469,9 @@ impl<'src, 't> Parser<'src, 't> {
             )));
         }
 
-        self.advance();
-
         // you can use newlines to make ur args cleaner too
-        while self.matches(&Token::Newline) {
-            self.advance();
-        }
+        self.advance();
+        self.eat_newlines();
 
         // TODO: make this use self.eat_args when its made
         let mut args: Vec<(Ident<'src>, Type<'src>)> = Vec::with_capacity(8);
@@ -532,9 +495,7 @@ impl<'src, 't> Parser<'src, 't> {
                 let argtyp: Type<'_> = self.parse_type();
                 args.push((argname, argtyp));
 
-                while self.cur() == Some(&Token::Newline) {
-                    self.advance();
-                }
+                self.eat_newlines();
 
                 if !self.matches_any(&[Token::Comma, Token::RParen]) {
                     return Err(Parse(MissingExpected(
@@ -551,9 +512,7 @@ impl<'src, 't> Parser<'src, 't> {
             );
 
             // for all u that do the arrow on the other line too... see below
-            while self.matches(&Token::Newline) {
-                self.advance();
-            }
+            self.eat_newlines();
         }
 
         self.expect_msg(
@@ -571,9 +530,7 @@ impl<'src, 't> Parser<'src, 't> {
             // brace does not for all you headasses that do
             // fn a () -> _
             // {
-            while self.matches(&Token::Newline) {
-                self.advance();
-            }
+            self.eat_newlines();
 
             // check for a brace before parsing, otherwise malformed
             let lbrace: bool = self.expect_msg(
@@ -598,7 +555,6 @@ impl<'src, 't> Parser<'src, 't> {
     }
 
     fn parse_for_expr(&mut self) -> Expr<'src> {
-        // TODO replace the many expect calls with self.error this is the only way it was workin
         let pattern: Pattern<'_> = self.parse_pattern();
 
         // syntax: for _ in r1..r2 (TODO figure out step amts)
@@ -640,16 +596,12 @@ impl<'src, 't> Parser<'src, 't> {
 
         // ONLY eat newlines when there's an else clause, otherwise the parser needs it as a delimiter
         let checkpoint: usize = self.pos;
-        while self.matches(&Token::Newline) {
-            self.advance();
-        }
+        self.eat_newlines();
 
         // check for an else statement, and skip present newlines
         let else_: Option<Box<Expr<'_>>> = if self.matches(&Token::Else) {
             self.advance();
-            while self.matches(&Token::Newline) {
-                self.advance();
-            }
+            self.eat_newlines();
 
             // recursively parse as an Else { If {} } we have an else if
             if self.matches(&Token::If) {
@@ -722,20 +674,14 @@ impl<'src, 't> Parser<'src, 't> {
         let mut branches = Vec::new();
 
         while !self.matches(&Token::RBrace) {
-            // skip newlines
-            while self.matches(&Token::Newline) {
-                self.advance();
-            }
-
-            // check for closing brace before parsing pattern
+            // skip newlines and check for closer
+            self.eat_newlines();
             if self.matches(&Token::RBrace) {
                 break;
             }
 
-            // parse the pattern
+            // parse pattern then expect ->
             let pattern = self.parse_pattern();
-
-            // expect ->
             if self
                 .expect_msg(
                     |t| matches!(t, &Token::Arrow),
@@ -746,15 +692,15 @@ impl<'src, 't> Parser<'src, 't> {
                 break;
             }
 
-            // parse the body (either a single expr or a block)
+            // parse body (either a single expr or a block)
             let body = if self.matches(&Token::LBrace) {
                 Stmt::Expr(self.parse_block_expr())
             } else {
                 Stmt::Expr(self.parse_expr(0))
             };
 
-            // optional guard (if you support them)
-            let guard = None; // TODO: implement guards if needed
+            // optional guard when i'm not too fuckin lazy to add them
+            let guard = None;
 
             branches.push(Branch {
                 pattern,
@@ -762,10 +708,8 @@ impl<'src, 't> Parser<'src, 't> {
                 body,
             });
 
-            // handle delimiters between arms
-            while self.matches_any(&[Token::Newline, Token::Semicolon]) {
-                self.advance();
-            }
+            // handle delimiters between stuff
+            self.eat_stmt_delimiters();
         }
 
         self.expect_msg(
@@ -885,9 +829,7 @@ impl<'src, 't> Parser<'src, 't> {
                     let expr = self.parse_expr(0);
 
                     // skip newlines (this was fuckin up tails)
-                    while self.matches(&Token::Newline) {
-                        self.advance();
-                    }
+                    self.eat_newlines();
 
                     if self.matches(&Token::RBrace) {
                         tail = Some(Box::new(expr));
@@ -903,9 +845,7 @@ impl<'src, 't> Parser<'src, 't> {
 
             // delimiter handling inside block
             if self.matches_any(&[Token::Newline, Token::Semicolon]) {
-                while self.matches_any(&[Token::Newline, Token::Semicolon]) {
-                    self.advance();
-                }
+                self.eat_stmt_delimiters();
                 continue;
             }
 
@@ -956,17 +896,13 @@ impl<'src, 't> Parser<'src, 't> {
 
             // prefix ranges (for slicing)
             Token::DotDot => {
-                let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[
+                let end = self.parse_optional_expr_until(&[
                     Token::LBrace,
                     Token::Newline,
                     Token::Semicolon,
                     Token::RBracket,
                     Token::RParen,
-                ]) {
-                    Some(Box::new(self.parse_expr(0)))
-                } else {
-                    None
-                };
+                ]);
 
                 Expr::Range { start: None, end }
             }
@@ -1111,7 +1047,6 @@ impl<'src, 't> Parser<'src, 't> {
                 | Token::LogicalNot
                 | Token::BitNot => nodes.push(Stmt::Expr(self.parse_expr(0))),
 
-                // TODO: see how we can break some of this down
                 Token::Let => match self.parse_let() {
                     Ok(stmt) => nodes.push(stmt),
                     Err(e) => self.error(e),
@@ -1167,11 +1102,5 @@ impl<'src, 't> Parser<'src, 't> {
             // i prolly dont have to do a move here... but wtv for rn
             Err(take(&mut self.errors))
         }
-    }
-}
-
-impl<'src, 't> fmt::Display for Parser<'src, 't> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!("have to do the display")
     }
 }
