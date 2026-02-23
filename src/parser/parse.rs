@@ -4,7 +4,7 @@ use core::fmt;
 use std::{mem::take, ops::Range, process::exit, time::Instant};
 
 use super::ast::*;
-use crate::error::{Diagnostic, ParseError, SyntaxError};
+use crate::error::{Diagnostic, ParseError::*, SyntaxError, SyntaxError::*};
 use crate::lexer::Token;
 
 // didn't tie parser lifetime to source
@@ -20,29 +20,34 @@ pub struct Parser<'src, 't> {
 
 impl<'src, 't> Parser<'src, 't> {
     #[inline]
+    /// check the current token without advancing
     fn cur(&self) -> Option<&'t Token<'src>> {
         self.tokens.get(self.pos)
     }
 
     #[inline]
+    /// check the following token without advancing
     fn peek(&self) -> Option<&'t Token<'src>> {
         self.tokens.get(self.pos + 1)
     }
 
     #[inline]
+    /// check if the current token matches something without advancing
     fn matches(&self, matched: &Token<'src>) -> bool {
         let tok: &Token<'_> = self.cur().unwrap_or(&Token::Error);
         tok == matched
     }
 
     #[inline]
-    // i'm so smart. match any using a slice to reduce the amt of calls to self.matches
+    /// check if any token in a slice is matched to the current token.
+    /// matches any using a slice to reduce the amt of calls to self.matches
     fn matches_any(&self, any: &[Token<'src>]) -> bool {
         let tok: &Token<'_> = self.cur().unwrap_or(&Token::Error);
         any.contains(tok)
     }
 
     #[inline]
+    /// push a diagnostic to the error vector
     fn error(&mut self, err: SyntaxError<'src>) {
         let diag: Diagnostic<'_, '_> = Diagnostic {
             path: self.path,
@@ -62,6 +67,7 @@ impl<'src, 't> Parser<'src, 't> {
     }
 
     #[inline]
+    /// expect a token or return none if not there
     fn expect<F>(&mut self, f: F) -> Option<&Token<'src>>
     where
         F: FnOnce(&Token<'_>) -> bool,
@@ -71,18 +77,45 @@ impl<'src, 't> Parser<'src, 't> {
             self.pos += 1;
             Some(tok)
         } else {
-            // TODO: add proper error handling
             None
         }
     }
 
-    // leaving some shit intentionally _ because i'll do lifetimes later
     #[inline]
+    /// expect but with an error attached to it
+    fn expect_msg<F>(&mut self, f: F, msg: &'src str) -> Option<&Token<'src>>
+    where
+        F: FnOnce(&Token<'_>) -> bool,
+    {
+        let tok = self.cur()?;
+        if f(tok) {
+            self.pos += 1;
+            Some(tok)
+        } else {
+            self.error(Parse(MissingExpected(msg)));
+            None
+        }
+    }
+
+    #[inline]
+    /// helper function to check if a modifier exists (wont advance if it isnt there)
+    fn check_modifier(&mut self, token: &Token<'src>) -> bool {
+        if self.matches(token) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    /// advance by a single token
     fn advance(&mut self) -> Option<&Token<'src>> {
         self.advance_by(1)
     }
 
     #[inline]
+    /// advance by n tokens
     fn advance_by(&mut self, n: u8) -> Option<&Token<'src>> {
         let tok: &Token<'src> = self.cur()?;
         self.pos += n as usize;
@@ -146,14 +179,16 @@ impl<'src, 't> Parser<'src, 't> {
                             // malformed calls
                             if !self.matches(&Token::RParen) {
                                 self.error(
-                                    SyntaxError::Parse(ParseError::MissingExpected("expected ',' or ')' in call. have to add this to the error system"))
+                                    Parse(MissingExpected("expected ',' or ')' in call. have to add this to the error system"))
                                 );
                             }
                         }
 
                         // expect r paren
-                        self.expect(|t: &Token<'_>| matches!(t, Token::RParen))
-                            .expect("missing ')'");
+                        self.expect_msg(
+                            |t: &Token<'_>| matches!(t, Token::RParen),
+                            "expected ')' to close function call",
+                        );
 
                         // method calls exist, so there's a match here
                         left = match left {
@@ -233,8 +268,10 @@ impl<'src, 't> Parser<'src, 't> {
                         };
 
                         // expect an ending bracket
-                        self.expect(|t: &Token<'_>| matches!(t, Token::RBracket))
-                            .expect("missing ']'");
+                        self.expect_msg(
+                            |t: &Token<'_>| matches!(t, Token::RBracket),
+                            "missing ']'",
+                        );
 
                         let lvalue: Box<Expr<'_>> = Box::new(left);
                         left = Expr::Index { obj: lvalue, sub };
@@ -327,13 +364,19 @@ impl<'src, 't> Parser<'src, 't> {
                 // range operator is always lower than normal arithmetic
                 Token::DotDot => {
                     self.advance();
-                    
+
                     // parse end of range if present (not followed by { or delimiter)
-                    let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon, Token::RBracket, Token::RParen]) {
+                    let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[
+                        Token::LBrace,
+                        Token::Newline,
+                        Token::Semicolon,
+                        Token::RBracket,
+                        Token::RParen,
+                    ]) {
                         Some(Box::new(self.parse_expr(0)))
-                    } 
-                    
-                    else { None };
+                    } else {
+                        None
+                    };
 
                     left = Expr::Range {
                         start: Some(Box::new(left)),
@@ -400,13 +443,12 @@ impl<'src, 't> Parser<'src, 't> {
                 self.advance();
 
                 // parse end if present
-                let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon]) {
-                    Some(Box::new(self.parse_expr(0)))
-                } 
-                
-                else {
-                    None
-                };
+                let end: Option<Box<Expr<'_>>> =
+                    if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon]) {
+                        Some(Box::new(self.parse_expr(0)))
+                    } else {
+                        None
+                    };
 
                 Pattern::Range { start: None, end }
             }
@@ -427,9 +469,11 @@ impl<'src, 't> Parser<'src, 't> {
                     patterns.push(self.parse_pattern());
                 }
 
-                self.expect(|t| matches!(t, Token::RParen))
-                    .expect("expected ')' in tuple pattern");
-                
+                self.expect_msg(
+                    |t| matches!(t, Token::RParen),
+                    "expected ')' in tuple pattern",
+                );
+
                 Pattern::Tuple(patterns)
             }
 
@@ -441,23 +485,22 @@ impl<'src, 't> Parser<'src, 't> {
     fn parse_func(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
         // TODO replace the many expect calls with self.error this is the only way it was workin
         self.advance();
-        let name = match self.cur() {
+        let name = match self.expect(|t| matches!(t, Token::Identifier(_))) {
             Some(Token::Identifier(name)) => Ident(name),
             _ => {
-                return Err(
-                    SyntaxError::Parse(ParseError::MissingExpected("function decl requires a name... did you forget it"))
-                );
+                return Err(Parse(MissingExpected(
+                    "function decl requires a name... did you forget it",
+                )));
             }
         };
 
         // syntax: fn func(arg: type, arg2: type) -> rtntype { }
         // unit type is colliding so if no args it's js the unit
-        self.advance();
         let has_args = self.matches(&Token::LParen);
         if !self.matches_any(&[Token::LParen, Token::Unit]) {
-            self.error(
-                SyntaxError::Parse(ParseError::MissingExpected("missing () around function args in definition"))
-            );
+            self.error(Parse(MissingExpected(
+                "missing () around function args in definition",
+            )));
         }
 
         self.advance();
@@ -474,41 +517,49 @@ impl<'src, 't> Parser<'src, 't> {
                 let argname = match self.cur() {
                     Some(Token::Identifier(name)) => Ident(name),
                     _ => {
-                        return Err(
-                            SyntaxError::Parse(ParseError::MissingExpected("arguments also require a name... did you forget them"))
-                        );
+                        return Err(Parse(MissingExpected(
+                            "arguments also require a name... did you forget them",
+                        )));
                     }
                 };
 
                 self.advance();
-                self.expect(|t: &Token<'_>| matches!(t, Token::Colon))
-                    .expect("arguments need to be typed, or specifically denoted compiler inferred");
+                self.expect_msg(
+                    |t: &Token<'_>| matches!(t, Token::Colon),
+                    "arguments need to be typed, or specifically denoted compiler inferred (likely missing ':' after argument name)"
+                );
 
-                let argtyp: Type<'_> =  self.parse_type();
+                let argtyp: Type<'_> = self.parse_type();
                 args.push((argname, argtyp));
 
                 while self.cur() == Some(&Token::Newline) {
                     self.advance();
                 }
 
-                println!("{:?}", self.cur());
                 if !self.matches_any(&[Token::Comma, Token::RParen]) {
-                    return Err(
-                        SyntaxError::Parse(ParseError::MissingExpected("arguments must be seperated by commas in the definition (may not have that be the case for calls)"))
-                    )
-                }
-
-                else if self.matches(&Token::Comma) && self.peek() != Some(&Token::RParen) {
+                    return Err(Parse(MissingExpected(
+                        "arguments must be seperated by commas in the definition (may not have that be the case for calls)",
+                    )));
+                } else if self.matches(&Token::Comma) && self.peek() != Some(&Token::RParen) {
                     self.advance();
                 }
             }
 
-            self.expect(|t: &Token<'_>| matches!(t, Token::RParen))
-                .expect("missing closing parenthesis around function args in definition");
+            self.expect_msg(
+                |t: &Token<'_>| matches!(t, Token::RParen),
+                "missing closing parenthesis around function args in definition",
+            );
+
+            // for all u that do the arrow on the other line too... see below
+            while self.matches(&Token::Newline) {
+                self.advance();
+            }
         }
 
-        self.expect(|t: &Token<'_>| matches!(t, Token::Arrow))
-            .expect("functions must contain an explicit return type");
+        self.expect_msg(
+            |t: &Token<'_>| matches!(t, Token::Arrow),
+            "functions must contain an explicit return type",
+        );
 
         // noticing how this is unnecessarily long now
         let typ = self.parse_type();
@@ -523,21 +574,26 @@ impl<'src, 't> Parser<'src, 't> {
             while self.matches(&Token::Newline) {
                 self.advance();
             }
-            
-            if self.expect(|t| matches!(t, Token::LBrace)).is_some() {
-                Some(self.parse_block_expr())
-            } else {
-                self.error(SyntaxError::Parse(
-                    ParseError::MissingExpected("function definitions must either end in a semicolon to show it's a prototype, or a brace initiating the body")
-                ));
 
-                Some(Expr::Unknown)
-            }
+            // check for a brace before parsing, otherwise malformed
+            let lbrace: bool = self.expect_msg(
+                |t| matches!(t, Token::LBrace),
+                "function definitions must either end in a semicolon to show it's a prototype, or a brace initiating the body",
+            ).is_some();
+
+            Some(if lbrace {
+                self.parse_block_expr()
+            } else {
+                Expr::Unknown
+            })
         };
-        
+
         // TODO: self.eat_args
         Ok(Stmt::FuncDecl {
-            name, typ, args, body,
+            name,
+            typ,
+            args,
+            body,
         })
     }
 
@@ -546,17 +602,21 @@ impl<'src, 't> Parser<'src, 't> {
         let pattern: Pattern<'_> = self.parse_pattern();
 
         // syntax: for _ in r1..r2 (TODO figure out step amts)
-        self.expect(|t: &Token<'_>| matches!(t, Token::In))
-            .expect("missing keyword 'in' inside for loop");
+        self.expect_msg(
+            |t: &Token<'_>| matches!(t, Token::In),
+            "missing keyword 'in' inside for loop",
+        );
 
         let iter = self.parse_expr(0);
 
         // for loops need braces for right now (TODO one line for loops)
-        self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
-            .expect("expected '{' in for loop");
-        
+        self.expect_msg(
+            |t: &Token<'_>| matches!(t, Token::LBrace),
+            "expected '{' in for loop",
+        );
+
         let body: Expr<'_> = self.parse_block_expr();
-        
+
         Expr::For {
             pattern,
             iter: Box::new(iter),
@@ -566,8 +626,15 @@ impl<'src, 't> Parser<'src, 't> {
 
     fn parse_if_expr(&mut self) -> Expr<'src> {
         let cond: Expr<'_> = self.parse_expr(0);
-        self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
-            .expect("missing '{' before if body");
+        if self
+            .expect_msg(
+                |t: &Token<'_>| matches!(t, Token::LBrace),
+                "missing '{' before if body",
+            )
+            .is_none()
+        {
+            return Expr::Unknown;
+        }
 
         let then: Expr<'_> = self.parse_block_expr();
 
@@ -590,9 +657,15 @@ impl<'src, 't> Parser<'src, 't> {
                 Some(Box::new(self.parse_if_expr()))
             }
             // otherwise make sure that brace is there (and then parse)
-            else {
-                self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
-                    .expect("missing '{' before else body");
+            else if self
+                .expect_msg(
+                    |t: &Token<'_>| matches!(t, Token::LBrace),
+                    "missing '{' before else body",
+                )
+                .is_none()
+            {
+                None
+            } else {
                 Some(Box::new(self.parse_block_expr()))
             }
         }
@@ -609,11 +682,17 @@ impl<'src, 't> Parser<'src, 't> {
         }
     }
 
-    // TODO replace any .expect("msg") calls with self.error. this is the only way it was workin frn
     fn parse_while_expr(&mut self) -> Expr<'src> {
         let cond: Expr<'_> = self.parse_expr(0);
-        self.expect(|t: &Token<'_>| matches!(t, Token::LBrace))
-            .expect("missing '{' before while body");
+        if self
+            .expect_msg(
+                |t: &Token<'_>| matches!(t, Token::LBrace),
+                "missing '{' before while body",
+            )
+            .is_none()
+        {
+            return Expr::Unknown;
+        }
 
         let body: Expr<'_> = self.parse_block_expr();
 
@@ -630,8 +709,15 @@ impl<'src, 't> Parser<'src, 't> {
         let item = self.parse_expr(0);
 
         // matches are surrounded with braces
-        self.expect(|t| matches!(t, &Token::LBrace))
-            .expect("match arms must be surrounded by braces");
+        if self
+            .expect_msg(
+                |t| matches!(t, &Token::LBrace),
+                "expected '{' before match arms",
+            )
+            .is_none()
+        {
+            return Expr::Unknown;
+        }
 
         let mut branches = Vec::new();
 
@@ -650,8 +736,15 @@ impl<'src, 't> Parser<'src, 't> {
             let pattern = self.parse_pattern();
 
             // expect ->
-            self.expect(|t| matches!(t, &Token::Arrow))
-                .expect("expected '->' after pattern in match arm");
+            if self
+                .expect_msg(
+                    |t| matches!(t, &Token::Arrow),
+                    "expected '->' after pattern in match arm",
+                )
+                .is_none()
+            {
+                break;
+            }
 
             // parse the body (either a single expr or a block)
             let body = if self.matches(&Token::LBrace) {
@@ -663,7 +756,11 @@ impl<'src, 't> Parser<'src, 't> {
             // optional guard (if you support them)
             let guard = None; // TODO: implement guards if needed
 
-            branches.push(Branch { pattern, guard, body });
+            branches.push(Branch {
+                pattern,
+                guard,
+                body,
+            });
 
             // handle delimiters between arms
             while self.matches_any(&[Token::Newline, Token::Semicolon]) {
@@ -671,8 +768,10 @@ impl<'src, 't> Parser<'src, 't> {
             }
         }
 
-        self.expect(|t| matches!(t, &Token::RBrace))
-            .expect("expected '}' to close match expression");
+        self.expect_msg(
+            |t| matches!(t, &Token::RBrace),
+            "expected '}' to close match expression",
+        );
 
         Expr::Match {
             item: Box::new(item),
@@ -682,9 +781,10 @@ impl<'src, 't> Parser<'src, 't> {
 
     fn parse_type(&mut self) -> Type<'src> {
         // TODO: add support for array and generic types
-        let typ: Type<'src> = match self
-            .expect(|t| matches!(t, &Token::Identifier(_) | &Token::Unit | &Token::Underscore))
-        {
+        let typ: Type<'src> = match self.expect_msg(
+            |t| matches!(t, &Token::Identifier(_) | &Token::Unit | &Token::Underscore),
+            "invalid or missing type",
+        ) {
             Some(Token::Identifier(typname)) => match *typname {
                 "i8" => Type::I8,
                 "u8" => Type::U8,
@@ -708,13 +808,8 @@ impl<'src, 't> Parser<'src, 't> {
 
             // push missing type after :
             _ => {
-
                 // TODO: potentially borrow parse_type as immutable and deal with the error outside
                 // this way we can have seperate errors for function type and variable type
-                self.error(SyntaxError::Parse(ParseError::MissingExpected(
-                    "invalid or missing type (either none after the : or a type that can't be evaluated by the parser.",
-                )));
-                
                 Type::Error
             }
         };
@@ -733,9 +828,7 @@ impl<'src, 't> Parser<'src, 't> {
 
                 // no closing } errors out
                 None => {
-                    self.error(SyntaxError::Parse(ParseError::MissingExpected(
-                        "expected '}' to close block",
-                    )));
+                    self.error(Parse(MissingExpected("expected '}' to close block")));
                     break;
                 }
             };
@@ -821,7 +914,7 @@ impl<'src, 't> Parser<'src, 't> {
                 break;
             }
 
-            self.error(SyntaxError::Parse(ParseError::MissingExpected(
+            self.error(Parse(MissingExpected(
                 "expected ';', newline, or '}' after statement in block",
             )));
         }
@@ -832,7 +925,13 @@ impl<'src, 't> Parser<'src, 't> {
     #[inline]
     fn parse_prefix(&mut self) -> Expr<'src> {
         // TODO: write proper error handling... and parse expr... and test this
-        let tok: &Token<'_> = self.advance().expect("unexpected EOF");
+        let tok: &Token<'_> = match self.advance() {
+            Some(t) => t,
+            None => {
+                self.error(Parse(MissingExpected("unexpected EOF")));
+                return Expr::Unknown;
+            }
+        };
         match tok {
             Token::Minus => Expr::Unary {
                 op: UnaryOp::Neg,
@@ -857,11 +956,15 @@ impl<'src, 't> Parser<'src, 't> {
 
             // prefix ranges (for slicing)
             Token::DotDot => {
-                let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[Token::LBrace, Token::Newline, Token::Semicolon, Token::RBracket, Token::RParen]) {
+                let end: Option<Box<Expr<'_>>> = if !self.matches_any(&[
+                    Token::LBrace,
+                    Token::Newline,
+                    Token::Semicolon,
+                    Token::RBracket,
+                    Token::RParen,
+                ]) {
                     Some(Box::new(self.parse_expr(0)))
-                } 
-                
-                else {
+                } else {
                     None
                 };
 
@@ -870,8 +973,10 @@ impl<'src, 't> Parser<'src, 't> {
 
             Token::LParen => {
                 let inner = self.parse_expr(0);
-                self.expect(|t: &Token<'_>| matches!(t, Token::RParen))
-                    .expect("missing ')'");
+                self.expect_msg(
+                    |t: &Token<'_>| matches!(t, Token::RParen),
+                    "expected ')' to close parenthesized expression",
+                );
                 inner
             }
 
@@ -889,7 +994,6 @@ impl<'src, 't> Parser<'src, 't> {
 
             Token::LBrace => self.parse_block_expr(),
 
-            // temporary solution for nimpl, i need to link ariadne
             _ => {
                 // add this back w a debug flag idk if debug { println!("not implemented: {tok:?}"); }
                 Expr::Unknown
@@ -901,18 +1005,18 @@ impl<'src, 't> Parser<'src, 't> {
         self.advance();
 
         // specifiers are evaluated in this order
-        let constant = self.expect(|t| matches!(t, Token::Const)).is_some();
-        let global = self.expect(|t| matches!(t, Token::Static)).is_some();
-        let mutable = self.expect(|t| matches!(t, Token::Mutable)).is_some();
+        let constant = self.check_modifier(&Token::Const);
+        let global = self.check_modifier(&Token::Static);
+        let mutable = self.check_modifier(&Token::Mutable);
 
         // ensure constant isnt used where it can't be
         if constant && mutable {
-            self.error(SyntaxError::Parse(ParseError::ConstDisallowed(
+            self.error(Parse(ConstDisallowed(
                 "constant cannot be used in tandem with mutable.",
             )));
         }
         if constant && global {
-            self.error(SyntaxError::Parse(ParseError::ConstDisallowed(
+            self.error(Parse(ConstDisallowed(
                 "constant cannot be used in tandem with static.",
             )));
         }
@@ -921,11 +1025,9 @@ impl<'src, 't> Parser<'src, 't> {
         let name: Ident<'_> = match self.expect(|t| matches!(t, Token::Identifier(_))) {
             Some(Token::Identifier(name)) => Ident(name),
             _ => {
-                return Err(SyntaxError::Parse(ParseError::MissingExpected(
+                return Err(Parse(MissingExpected(
                     "let must have an identifier afterwards",
                 )));
-
-                // continue;
             }
         };
 
@@ -933,9 +1035,7 @@ impl<'src, 't> Parser<'src, 't> {
         let typ = if self.matches(&Token::Colon) {
             self.advance();
             self.parse_type()
-        }
-        
-        else {
+        } else {
             Type::Inferred
         };
 
@@ -946,9 +1046,7 @@ impl<'src, 't> Parser<'src, 't> {
 
             match self.cur().unwrap_or(&Token::Error) {
                 Token::Error | Token::Newline | Token::Semicolon | Token::Eof => {
-                    return Err(SyntaxError::Parse(ParseError::MissingExpected(
-                        "expected expression after '='",
-                    )));
+                    return Err(Parse(MissingExpected("expected expression after '='")));
                 }
 
                 _ => {
@@ -959,7 +1057,7 @@ impl<'src, 't> Parser<'src, 't> {
 
         // can't automatically deduce type on assignment (maybe make it so that the type is filled when assigned to?)
         if typ == Type::Inferred && init.is_none() {
-            return Err(SyntaxError::Parse(ParseError::MissingExpected(
+            return Err(Parse(MissingExpected(
                 "type cannot be inferred without a right hand side",
             )));
         }
@@ -1025,7 +1123,6 @@ impl<'src, 't> Parser<'src, 't> {
                     Err(e) => self.error(e),
                 },
 
-
                 // control flow: this dont seem right but...
                 // Token::Break => nodes.push(Stmt::Break),
                 // Token::Continue => nodes.push(Stmt::Continue),
@@ -1046,7 +1143,7 @@ impl<'src, 't> Parser<'src, 't> {
 
             // TODO: make the compiler warn on unnecessary semicolon
             if !(self.matches_any(&[Token::Newline, Token::Semicolon, Token::Eof, Token::LBrace])) {
-                self.error(SyntaxError::Parse(ParseError::MissingExpected(
+                self.error(Parse(MissingExpected(
                     "all statements must be followed by either a newline or semicolon",
                 )));
                 continue;
