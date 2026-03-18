@@ -61,15 +61,18 @@ impl Display for SyntaxError<'_> {
                 use LexError::*;
                 match le {
                     UnterminatedString(s) => write!(
-                        f, "\x1b[1mUnterminatedString:\x1b[22m Strings must be properly terminated, {s} is missing termination"
+                        f,
+                        "\x1b[1mUnterminatedString:\x1b[22m Strings must be properly terminated, {s} is missing termination"
                     ),
 
                     UnterminatedChar(s) => write!(
-                        f, "\x1b[1mUnterminatedChar:\x1b[22m Chars must be properly terminated, {s} is missing termination"
+                        f,
+                        "\x1b[1mUnterminatedChar:\x1b[22m Chars must be properly terminated, {s} is missing termination"
                     ),
 
                     UnknownToken(s) => write!(
-                        f, "\x1b[1mUnknownToken:\x1b[22m The character '{s}' is not in the grammar for this language."
+                        f,
+                        "\x1b[1mUnknownToken:\x1b[22m The character '{s}' is not in the grammar for this language."
                     ),
                 }
             }
@@ -79,13 +82,16 @@ impl Display for SyntaxError<'_> {
                 use ParseError::*;
                 match &pe {
                     MissingExpected(s) => write!(f, "missing a value where expected, {s}"),
-                    ConstDisallowed(s) =>  write!(f, "const cannot be used with some modifiers: {s}"),
+                    ConstDisallowed(s) => {
+                        write!(f, "const cannot be used with some modifiers: {s}")
+                    }
                 }
             }
 
             // catchall == unknown
             SyntaxError::Unknown => write!(
-                f, "TODO: add context to unknown errors. this is going to be exhaustive but in the event we don't match..."
+                f,
+                "TODO: add context to unknown errors. this is going to be exhaustive but in the event we don't match..."
             ),
         }
     }

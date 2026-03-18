@@ -1,10 +1,14 @@
+#![allow(unused_imports)]
+
 //! docs here soon i'm lazy as fuck
+mod analysis;
 mod error;
 mod lexer;
 mod parser;
 
 // gotta work on this name but now im tired
 use crate::{
+    analysis::Analyzer, // unused for rn
     error::{Diagnostic, dump},
     lexer::lex,
     parser::{Parser, ast::Stmt},
@@ -89,7 +93,7 @@ fn main() {
         errors: Vec::new(),
     };
 
-    let _ast: Vec<Stmt<'_>> = match parser.parse(&flags) {
+    let ast: Vec<Stmt<'_>> = match parser.parse(&flags) {
         Ok(ok) => ok,
         Err(errors) => {
             log_errors(&errors, flags);
@@ -97,10 +101,22 @@ fn main() {
         }
     };
 
+    let mut analyzer: Analyzer<'_, '_> = Analyzer::new(ast);
+    analyzer.analyze();
+
     if flags[0] {
         press_btn_continue::wait(
             "Press any button to continue to semantic analysis and the opt layer. (not done yet)",
         )
         .unwrap();
+    }
+
+    // testing the analyzer now...
+    if flags[0] {
+        println!(
+            "\nRan analyzer and resolved {} symbols.",
+            analyzer.resolved.len()
+        );
+        println!("List of inferred or resolved types: {:#?}", analyzer.types);
     }
 }
