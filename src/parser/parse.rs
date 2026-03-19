@@ -19,6 +19,15 @@ pub struct Parser<'src, 't> {
 
 impl<'src, 't> Parser<'src, 't> {
     #[inline]
+    /// simple span helper
+    fn cur_span(&self) -> Range<usize> {
+        self.spans
+            .get(self.pos)
+            .cloned()
+            .unwrap_or(self.src.len()..self.src.len())
+    }
+
+    #[inline]
     /// check the current token without advancing
     fn cur(&self) -> Option<&'t Token<'src>> {
         self.tokens.get(self.pos)
@@ -65,20 +74,20 @@ impl<'src, 't> Parser<'src, 't> {
         self.errors.push(diag);
     }
 
-    #[inline]
-    /// expect a token or return none if not there
-    fn expect<F>(&mut self, f: F) -> Option<&Token<'src>>
-    where
-        F: FnOnce(&Token<'_>) -> bool,
-    {
-        let tok = self.cur()?;
-        if f(tok) {
-            self.pos += 1;
-            Some(tok)
-        } else {
-            None
-        }
-    }
+    // expect a token or return none if not there
+    // #[inline]
+    // fn expect<F>(&mut self, f: F) -> Option<&Token<'src>>
+    // where
+    //     F: FnOnce(&Token<'_>) -> bool,
+    // {
+    //     let tok = self.cur()?;
+    //     if f(tok) {
+    //         self.pos += 1;
+    //         Some(tok)
+    //     } else {
+    //         None
+    //     }
+    // }
 
     #[inline]
     /// expect but with an error attached to it
@@ -119,6 +128,19 @@ impl<'src, 't> Parser<'src, 't> {
         let tok: &Token<'src> = self.cur()?;
         self.pos += n as usize;
         Some(tok)
+    }
+
+    #[inline]
+    // eat current identifier and hook lexer span to the node
+    fn take_ident(&mut self) -> Option<Ident<'src>> {
+        match self.cur() {
+            Some(Token::Identifier(name)) => {
+                let ident = Ident(name, self.cur_span());
+                self.advance();
+                Some(ident)
+            }
+            _ => None,
+        }
     }
 
     #[inline]
@@ -231,8 +253,8 @@ impl<'src, 't> Parser<'src, 't> {
 
         if self.matches_any(&[Token::Dot, Token::Arrow]) {
             self.advance();
-            let name = match self.advance() {
-                Some(Token::Identifier(name)) => name,
+            let name = match self.take_ident() {
+                Some(name) => name,
                 _ => {
                     self.error(Parse(MissingExpected(
                         "expected identifier after field access operator",
@@ -244,7 +266,7 @@ impl<'src, 't> Parser<'src, 't> {
 
             *left = Expr::Field {
                 obj: Box::new(current),
-                name: Ident(name),
+                name,
             };
             return;
         }
@@ -421,9 +443,11 @@ impl<'src, 't> Parser<'src, 't> {
             }
 
             Some(Token::Identifier(name)) => {
-                let n = *name;
-                self.advance();
-                Pattern::Ident(n)
+                let _ = name;
+                Pattern::Ident(
+                    self.take_ident()
+                        .expect("identifier disappeared while parsing pattern"),
+                )
             }
 
             // tuples
@@ -451,8 +475,8 @@ impl<'src, 't> Parser<'src, 't> {
 
     fn parse_func(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
         self.advance();
-        let name = match self.expect(|t| matches!(t, Token::Identifier(_))) {
-            Some(Token::Identifier(name)) => Ident(name),
+        let name = match self.take_ident() {
+            Some(name) => name,
             _ => {
                 return Err(Parse(MissingExpected(
                     "function decl requires a name... did you forget it",
@@ -477,8 +501,8 @@ impl<'src, 't> Parser<'src, 't> {
         let mut args: Vec<(Ident<'src>, Type<'src>)> = Vec::with_capacity(8);
         if has_args {
             while !self.matches(&Token::RParen) {
-                let argname = match self.cur() {
-                    Some(Token::Identifier(name)) => Ident(name),
+                let argname = match self.take_ident() {
+                    Some(name) => name,
                     _ => {
                         return Err(Parse(MissingExpected(
                             "arguments also require a name... did you forget them",
@@ -486,7 +510,6 @@ impl<'src, 't> Parser<'src, 't> {
                     }
                 };
 
-                self.advance();
                 self.expect_msg(
                     |t: &Token<'_>| matches!(t, Token::Colon),
                     "arguments need to be typed, or specifically denoted compiler inferred (likely missing ':' after argument name)"
@@ -743,7 +766,7 @@ impl<'src, 't> Parser<'src, 't> {
                 "bool" => Type::Bool,
                 "char" => Type::Char,
                 "str" => Type::Str,
-                _ => Type::Ident(Ident(typname)),
+                _ => Type::Ident(Ident(typname, self.spans[self.pos - 1].clone())),
             },
 
             // unit type and inferred have to be handled seperately
@@ -865,6 +888,7 @@ impl<'src, 't> Parser<'src, 't> {
     #[inline]
     fn parse_prefix(&mut self) -> Expr<'src> {
         // TODO: write proper error handling... and parse expr... and test this
+        let span = self.cur_span();
         let tok: &Token<'_> = match self.advance() {
             Some(t) => t,
             None => {
@@ -916,12 +940,13 @@ impl<'src, 't> Parser<'src, 't> {
                 inner
             }
 
-            Token::Identifier(name) => Expr::Ident(Ident(name)),
-            Token::LitInteger(n) => Expr::Literal(Literal::Int(n)),
-            Token::LitFloat(n) => Expr::Literal(Literal::Float(n)),
-            Token::LitString(s) => Expr::Literal(Literal::String(s)),
-            Token::LitChar(c) => Expr::Literal(Literal::Char(c)),
-            Token::Bool(b) => Expr::Literal(Literal::Bool(*b)),
+            Token::Identifier(name) => Expr::Ident(Ident(name, span)),
+            Token::LitInteger(n) => Expr::Literal(Literal::Int(n, span)),
+            Token::LitFloat(n) => Expr::Literal(Literal::Float(n, span)),
+            Token::LitString(s) => Expr::Literal(Literal::String(s, span)),
+            Token::LitChar(c) => Expr::Literal(Literal::Char(c, span)),
+            Token::Bool(b) => Expr::Literal(Literal::Bool(*b, span)),
+            Token::Unit => Expr::Literal(Literal::Unit(span)),
 
             Token::If => self.parse_if_expr(),
             Token::While => self.parse_while_expr(),
@@ -958,8 +983,8 @@ impl<'src, 't> Parser<'src, 't> {
         }
 
         // consume name (TODO: add let _)
-        let name: Ident<'_> = match self.expect(|t| matches!(t, Token::Identifier(_))) {
-            Some(Token::Identifier(name)) => Ident(name),
+        let name: Ident<'_> = match self.take_ident() {
+            Some(name) => name,
             _ => {
                 return Err(Parse(MissingExpected(
                     "let must have an identifier afterwards",

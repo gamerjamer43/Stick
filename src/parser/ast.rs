@@ -2,9 +2,16 @@
 #![allow(dead_code)]
 
 use core::fmt;
+use std::ops::Range;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Ident<'src>(pub &'src str);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Ident<'src>(pub &'src str, pub Range<usize>);
+
+impl<'src> Ident<'src> {
+    pub fn span(&self) -> Range<usize> {
+        self.1.clone()
+    }
+}
 
 // make ident print as just the value inside
 impl<'src> fmt::Display for Ident<'src> {
@@ -16,17 +23,26 @@ impl<'src> fmt::Display for Ident<'src> {
 /// literals for all the types below
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal<'src> {
-    // TODO: figure out if i should just do Int with a bit value at parse
-    // or if i should just store seperate literals for each bit width
-    Int(&'src str),
-    Uint(&'src str),
+    Int(&'src str, Range<usize>),    // ints coerce to i64
+    Float(&'src str, Range<usize>),  // floats coerce to f64
+    Bool(bool, Range<usize>),        // boolean syntax === rusts
+    Char(&'src str, Range<usize>),   // chars will be a scalar like rust
+    String(&'src str, Range<usize>), // utf8 strings (because why utf32)
+    Unit(Range<usize>),              //
+}
 
-    Float(&'src str),
-    Double(&'src str),
-    Bool(bool),
-    Char(&'src str),
-    String(&'src str),
-    Unit,
+// store spans with them
+impl<'src> Literal<'src> {
+    pub fn span(&self) -> Range<usize> {
+        match self {
+            Literal::Int(_, span)
+            | Literal::Float(_, span)
+            | Literal::Bool(_, span)
+            | Literal::Char(_, span)
+            | Literal::String(_, span)
+            | Literal::Unit(span) => span.clone(),
+        }
+    }
 }
 
 /// all builtin types
@@ -313,7 +329,7 @@ pub enum Pattern<'src> {
     Wildcard,
 
     /// just a plain identifier which binds its value
-    Ident(&'src str),
+    Ident(Ident<'src>),
 
     /// literal value match
     Literal(Literal<'src>),

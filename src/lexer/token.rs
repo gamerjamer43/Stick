@@ -11,7 +11,7 @@ use logos::{Logos, skip};
 #[logos(skip r"[ \t\f\r]+")] // ignore tabs, form feeds, and carriage returns
 pub enum Token<'src> {
     // comments (skipped)
-    #[regex(r"//[^\r]*", skip, allow_greedy = true)]
+    #[regex(r"//[^\r\n]*", skip, allow_greedy = true)]
     #[regex(r"/\*([^*]|\*+[^*/])*\*+/", skip)]
     Comment,
 

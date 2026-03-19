@@ -101,7 +101,7 @@ fn main() {
         }
     };
 
-    let mut analyzer: Analyzer<'_, '_> = Analyzer::new(ast);
+    let mut analyzer: Analyzer<'_, '_> = Analyzer::new(&path, &src, ast);
     analyzer.analyze();
 
     if flags[0] {

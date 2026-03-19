@@ -42,11 +42,21 @@ pub enum ParseError<'src> {
     ConstDisallowed(&'src str),
 }
 
+/// semantic errors found during analysis and type checking
+#[derive(Debug, PartialEq, Clone, AsRefStr)]
+pub enum SemanticError<'src> {
+    TypeInference(&'src str),
+    TypeMismatch(&'src str),
+    UnknownIdentifier(&'src str),
+    InvalidOperation(&'src str),
+}
+
 /// unified place to hold any error that may happen during compile time
 #[derive(Debug, PartialEq, Clone, Default, AsRefStr)]
 pub enum SyntaxError<'src> {
     Lex(LexError<'src>),
     Parse(ParseError<'src>),
+    Semantic(SemanticError<'src>),
 
     #[default]
     Unknown,
@@ -85,6 +95,17 @@ impl Display for SyntaxError<'_> {
                     ConstDisallowed(s) => {
                         write!(f, "const cannot be used with some modifiers: {s}")
                     }
+                }
+            }
+
+            // semantic errors
+            SyntaxError::Semantic(se) => {
+                use SemanticError::*;
+                match &se {
+                    TypeInference(s) => write!(f, "type inference failed: {s}"),
+                    TypeMismatch(s) => write!(f, "type mismatch: {s}"),
+                    UnknownIdentifier(s) => write!(f, "unknown identifier: {s}"),
+                    InvalidOperation(s) => write!(f, "invalid operation: {s}"),
                 }
             }
 

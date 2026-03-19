@@ -1,4 +1,4 @@
-use super::{ParseError, SyntaxError};
+use super::{ParseError, SemanticError, SyntaxError};
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use std::{
     fmt::{Display, Formatter, Result},
@@ -29,6 +29,7 @@ impl<'src> SyntaxError<'src> {
         match self {
             SyntaxError::Lex(e) => e.as_ref(),
             SyntaxError::Parse(e) => e.as_ref(),
+            SyntaxError::Semantic(e) => e.as_ref(),
             SyntaxError::Unknown => "Unknown",
         }
     }
@@ -67,6 +68,21 @@ impl<'src> SyntaxError<'src> {
                     } else {
                         "Unknown"
                     }
+                }
+            },
+
+            SyntaxError::Semantic(e) => match e {
+                SemanticError::TypeInference(_) => {
+                    "for inferred types: assign a value for type deduction to work, otherwise specify an explicit type"
+                }
+                SemanticError::TypeMismatch(_) => {
+                    "initializer/result type is incompatible with the declared or expected type"
+                }
+                SemanticError::UnknownIdentifier(_) => {
+                    "declare the identifier before use, or fix the identifier name"
+                }
+                SemanticError::InvalidOperation(_) => {
+                    "check operator and operand types, not all operators can apply to all types."
                 }
             },
             SyntaxError::Unknown => "Only god can save you (or reading the docs lmao.)",
