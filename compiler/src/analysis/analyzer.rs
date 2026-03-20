@@ -496,6 +496,31 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         self.infer_expr_type_with_hint(expr, None)
     }
 
+    // run thru each statement in a block and ensure it works
+    fn check_block(&mut self, node: &Stmt<'src>) {
+        let Stmt::Expr(Expr::Block { stmts, tail }) = node else {
+            return;
+        };
+
+        for stmt in stmts.clone() {
+            match stmt {
+                Stmt::VarDecl { .. } => self.check_decl(&stmt),
+                Stmt::Expr(Expr::Block { .. }) => self.check_block(&stmt),
+                Stmt::Expr(expr) => {
+                    let _ = self.infer_expr_type(&expr);
+                }
+                Stmt::Return(Some(expr)) => {
+                    let _ = self.infer_expr_type(&expr);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(tail_expr) = tail.as_deref() {
+            let _ = self.infer_expr_type(tail_expr);
+        }
+    }
+
     // in declarations, check for the following:
     fn check_decl(&mut self, node: &Stmt<'src>) {
         // first form it into a usable vardecl
@@ -558,7 +583,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
     pub fn analyze(&mut self) {
         while let Some(node) = self.cur().cloned() {
             match node {
-                // Stmt::Expr(Expr::Block { .. }) => self.check_block(&node),
+                Stmt::Expr(Expr::Block { .. }) => self.check_block(&node),
 
                 // Stmt::Expr(Expr::Assign { .. }) => self.check_assign(&node),
                 // Stmt::Expr(Expr::Call{ .. }) => self.check_call(&node),

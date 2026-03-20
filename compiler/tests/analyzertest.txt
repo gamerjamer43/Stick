@@ -7,3 +7,8 @@ let k: i32 = j + 1
 
 // should coerce to an i64
 let l = k + j
+
+let j = {
+    let temp = k + 1
+    temp
+}
