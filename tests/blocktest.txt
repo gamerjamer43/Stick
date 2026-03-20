@@ -1,0 +1,48 @@
+// statmements and blocks
+
+if five == 5 {
+    writeln("well fucking obviously {five} == 5")
+}
+
+else if five == 6 {
+    writeln("erm")
+}
+
+else {
+    writeln("hey")
+}
+
+// standard for loops r rust style
+for i in 0..5 {
+
+}
+
+// enhanced for loops work too!
+for i in expr {
+
+}
+
+while five == 5 {
+    five++
+}
+
+// statements r being jank so i keep shit here just to test
+writeln("fuck")
+
+fn name(arg: _, arg2: ()) -> ();
+
+fn name2(arg: _, arg2: ()) -> () {
+    writeln("hi")
+}
+
+fn name3() -> () {
+    writeln("hi")
+}
+
+match case {
+    1 -> writeln("hi")
+    _ -> writeln("error")
+}
+
+
+// TODO: match statements

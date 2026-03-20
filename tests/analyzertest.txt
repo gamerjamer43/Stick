@@ -1,0 +1,9 @@
+let i: i32 = (1 + (2 + 3))
+
+// should coerce to i64 (for rn)
+let j = 1
+
+let k: i32 = j + 1
+
+// should coerce to an i64
+let l = k + j

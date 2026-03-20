@@ -1,0 +1,53 @@
+// keeping these seperate due to clutter
+
+// declarations with a value
+let typed: i32 = 5
+let underscored: _ = 5
+let inferred = 5
+
+// declarations without a value need a type
+let declared: ()
+
+// mutable declarations
+let mutable testMutable: i32 = 5
+let mutable testMutable2 = 5
+
+// const declarations (with or without type)
+let const test3 = 5
+let const test4: _ = 5
+
+/*
+ * will likely seperate static and global:
+ * static = fixed mem location, no resize needed 
+ * global = allocated to the global pool (instead of static doing that)
+ * (determined at type checking/semantic analysis)
+ */
+let static test = 5
+let static test2: i32 = 5
+
+// static mutable tests
+let static mutable staticMut = 5
+let static mutable staticMut: i32 = 5
+
+
+// block declarations (this is a stupid example, but it contains a tail and a block)
+let five: i32 = {
+    let value: i32 = 5
+    value
+}
+
+// SHOULD FAIL
+// NO TYPE:
+// let [const/static/mutable] inferred
+//
+// COLON BUT NO TYPE FOLLOWING instead
+// let testing:
+// let testing: = value
+//
+// EQUALS WITH NO RHS
+// let testing =
+// let testing: i32 =
+//
+// DISALLOWED PAIRINGS
+// let const mutable failure = 5
+// let const static failure2 = 6

@@ -1,2 +1,14 @@
 # for rn
 README.md
+
+# rust shit
+/target/
+
+# log files
+*.log
+
+# privating my todo again
+TODO
+
+# hiding smoketest (cus this prolly wont be used going forward)
+smoketest.txt
