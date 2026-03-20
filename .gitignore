@@ -1,6 +1,3 @@
-# for rn
-README.md
-
 # rust shit
 /target/
 
@@ -12,3 +9,23 @@ TODO
 
 # hiding smoketest (cus this prolly wont be used going forward)
 smoketest.txt
+
+# c shit (idk why make generates .d)
+*.d
+
+# and i forgot abt pycache fuckin a
+**/__pycache__
+*.pyc
+
+# and bins/swaps/static/dynamic libs
+*.o
+*.dll
+*.swp
+*.out
+*.exe
+
+# emitted bytecode
+*.stk
+
+# hashmap impl i may or may not use
+hashmap.h

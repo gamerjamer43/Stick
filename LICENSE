@@ -1,4 +1,4 @@
-Unnamed language frontend, meant to emit bytecode for a virtual machine, VM unnamed.
+Unnamed language frontend, meant to emit bytecode for a virtual machine, VM unnamed. Bytecode VM, meant to parse bytecode for the Stick programming language. Parsed from AST parsed by a Rust frontend.
 Copyright (C) 2025 Noah Mingolelli
 
                     GNU GENERAL PUBLIC LICENSE
