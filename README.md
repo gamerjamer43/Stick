@@ -1,4 +1,4 @@
-<h1 align="center"> StickVM 🌿 </h1>
+<h1 align="center"> Stick 🌿 </h1>
 
 <p align="center"><img width="256" height="256" alt="Stick Logo" src="https://github.com/user-attachments/assets/27d2184b-8638-4f0f-a2ad-48379adcad30" /></p>
 <p align="center">
@@ -8,9 +8,9 @@
 </p>
 <p align="center">You can hit people with it, you can burn it, you can dig in the dirt with it. What, you need a swiss army knife?</p>
 <p align="center"><em>A lightweight, register-based bytecode virtual machine written in C.</em></p>
-<p align="center">
-  <strong>This repo is also linked with the <a href="https://github.com/gamerjamer43/stick">Stick Compiler</a>.</strong>
-</p>
+<p align="center"><em>A blazing fast, provably correct compiler written in Rust.</em></p>
+
+<b align="center">NOTE: this is README is dated, and the language is still heavily in prod. While I am in school, but I'm still goin nuts. List of current stuff on my backlog in</b> [TODO](TODO.md) (haven't been using it buttt...)
 
 ## Table of Contents
 
@@ -26,13 +26,11 @@
 
 ## Introduction
 
-<h3 align="center">StickVM is a simple, stable and fast register VM, with tightly packed 32 bit instructions you make the most out of each operation. The design is meant to be extremely compute light, optimizing for minimal cycle count and low memory footprint wherever possible. This makes it <b>perfect</b> for both embedding in larger projects, and using standalone for raw power. The goal is a clean, portable runtime that's easy to understand and extend.</h3>
-
-<b align="center">NOTE: this is heavily in prod, and I am in school, but I'm still goin nuts. List of current stuff on my backlog in</b> [TODO](TODO.md)
+<h3 align="center">Stick's Virtual Machine is a simple, stable and fast register-based VM, with tightly packed 32 bit instructions you make the most out of each operation. The design is meant to be extremely compute light, optimizing for minimal cycle count and low memory footprint wherever possible. This makes it <b>perfect</b> for both embedding in larger projects, and using standalone for raw power. The goal is a clean, portable runtime that's easy to understand and extend.</h3>
 
 ## Specs
 
-- **32 bit instruction width** — `[op:8][a:8][b:8][c:8]`, giving us room for plenty of information dense bytecode. (a million instructions is only 4mb itself)
+- **32 bit instruction width** — `[op:8][a:8][b:8][c:8]`, giving us room for plenty of information dense bytecode (a million instructions is only 4mb itself). Double words are only 64 bits, making this relatively compact.
 - **Windowed register-based architecture** — The entire VM runs on 65536 global registers. Each frame carves out its own slice of the register file using a base offset, and on return everything in that scope is cleared and the pointer is pulled back. Simple.
 - **Strong static typing, at both compile and runtime** — The goal is to make this as absolutely explicit as possible. Logical operations can only be done on booleans, each type has RTTI (full metadata WIP, but for right now at least the type)
 - **Constant & global pools** — Constants are immutable and baked in at compile time. Globals are mutable and persist across the entire runtime. No need to construct values at runtime, they just get loaded in.
@@ -42,10 +40,9 @@
 ```c
 // constants, globals, and values that otherwise need to be serialized. if we do not need to memcpy more than once in a hot loop it only costs abt 2 cycles + disk/ram overhead
 typedef struct {
-    u8 type;
     u8 payload[8];
+    u8 type;
 } Value;
-
 
 // any value that lives in a register will be in a union so type punning can happen based on the tag
 typedef union {
@@ -265,6 +262,27 @@ I hope this creates for an interesting (and original) concept that gives you the
 - **Stack Tracing & Disassembler** — This is gonna be hard at the bytecode level, unless I create a DISASSEMBLER. I may just deal with that at the compiler level, and make any errors throw a generic error that kinda tells you where your error is coming from. But this is deffo a lot later on the list, potentially even after the JIT.
 - **Again... "more stuff"** — I still have plenty more to research, so this will be incrementally optimized. Once the core language is done and school picks up **this will still be in maintenance,** although I plan to only sink about 3 hours a week into dedicated tasks.
 
+### Major Feature Checklist
+**Frontend:**
+- [x] Lexer
+- [X] Parser (90% done)
+- [/] Semantic analysis
+- [ ] Language Server Protocol
+- [ ] TextMate & LSP based highlighting
+- [ ] Comptime interpreter (and simple REPL)
+- [ ] Intermediate Representation (multi level potentially)
+- [ ] Bytecode emitter
+- [ ] Disassembler (doneish in python?)
+
+**Backend:**
+- [ ] Bytecode Verifier
+- [/] Bytecode VM (currently @ 105 test cases)
+- [/] Native FFI
+- [ ] Standard library
+- [ ] Debug info / source maps
+- [ ] C-compatible ABI
+- [ ] Runtime JIT layer
+
 ### ✅ Done
 - [x] VM core (init, load, run, free)
 - [x] Binary file reader with header validation
@@ -288,25 +306,11 @@ I hope this creates for an interesting (and original) concept that gives you the
 - [X] Object access (GETELEM, SETELEM, ARRGET, ARRSET, ARRLEN)
 - [X] String operations (CONCAT, STRLEN)
 - [X] GC and hooks (finalizing a tri color, generational, bucketed bump GC. hopefully not too much overhead cuz allocs r quick, bucket allocs tho...)
+- [/] Native function registration API (test it)
 
-### 🎯 High Priority
-- [ ] Figure out why strlen isn't working (too late for me rn)
-- [ ] Figure out how to do stack strings/arrays. You can do this using 4 chars per register but this is slow(ish)
-- [ ] Frontend compiler (Stick language → bytecode, handwriting a parser rn)
-- [ ] Native function registration API (relatively simple)
-
-### 🧱 Core Features
-- [ ] Bytecode Verifier
+### 🎯 Other High Priority
 - [ ] Remove bounds checks (AFTER ABOVE)
-- [ ] Emitter! Start that shit!
 - [ ] Add more to this list... that brain is somewhere bud!
-
-### 💫 Future
-- [ ] Debug info / source maps
-- [ ] Disassembler (doneish?)
-- [ ] Simple REPL (can be done thru the compiler)
-- [ ] Pre-compilation execution (after the above! better compile time safety, VM does less at runtime)
-- [ ] JIT compilation/VM opt layer (maybe)
 
 ## Contributing
 
@@ -315,17 +319,16 @@ I'm working on this as a personal project, so if you really want me to start dro
 ## Acknowledgments
 
 ### Built with 🔧:
+- Rust 24, [Logos](https://github.com/maciejhirsz/logos), and [Ariadne](https://github.com/zesterer/ariadne)
 - Pure C99*. No external deps.
 - Numpy, rich, and the pystdlib for just the tests.
 - A lack of desire to sleep, and a lot of vyvanse :)
+
 <p style="font-size:10"><b>*(may jump it to C11 for _Generic and _Static_assert, better runtime handling)</b></p>
 
 ---
 
-<p align="center">
-    Made with 🌿 by <a href="https://github.com/gamerjamer43">gamerjamer43</a>
-</p>
-
-<p align="center">
-    <sub>Execute responsibly.</sub>
-</p>
+<div align="center">
+    <p style="margin:0">Made with 🌿 by <a href="https://github.com/gamerjamer43">gamerjamer43</a></p>
+    <sub>Execute responsibly. Never run untrusted code!!! Due to C FFI, this language has the same power as any other language to steal credentials, compromise your device, or install files!</sub>
+</div>

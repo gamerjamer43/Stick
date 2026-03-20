@@ -1,23 +1,23 @@
 if anyone has recommendations feel free to hit me up @ [noah@noahmingolel.li](mailto:noah@noahmingolel.li) like it 1996.
 
-## plan
-
-ORDER OF OPERATIONS STARTING TOMORROW (IDC IF YOU BREAK IT. BUT U SHOULD WRITE THE PARSER)
-- parser (hand roll or chumsky, hand rolling seems easier cuz we store a token span and we can just reuse the line helper to stack trace) [STARTED]
-- emitter (basic ops, should just relatively similar as to what i setup for python)
-- vm (check unimplemented opcodes, add bytecode verifier and other bullshit)
-- AOT optimizing step (constant folding, string interning, look into others cuz these the only ones i can remember)
-- lowering step? should i use an existing IR framework or? i don't wanna add a compiler quite yet but this makes the workflow much simpler... could potentially use LLVM ir and either emit bytecode or fully compile*
+## future execution features:
 - JIT step (HARD. have to interoperate with C.)
 - web embed (use cheerp its so light. should be only a 20kb runtime which is fucking insane)
 - fully aot compiled (replacing cheerp with a wasm compiled backend using LLVM and/or cranelift. may do both to target as much as possible)
 
 ## backlog
 asap:
-- get started on the emitter, make it do basic register ops and math
-- setup heap to use forwarding pointers (and figure out how to do that)
-- heap caching (heavily used heap objects should load from a higher precedence array, or even actually cache the line)
-- opcodes:
+- for analyzer, do:
+  - function calls
+  - function decls
+  - returns
+  - reassignments
+  - code cleaning
+
+- for vm do:
+  - setup heap to use forwarding pointers (and figure out how to do that)
+  - heap caching (heavily used heap objects should load from a higher precedence array, or even actually cache the line)
+  - opcodes:
     - TAILCALL (duh its listed 3 times its just cool to me)
     - NEWARR, NEWTABLE, NEWOBJ (when heap done, maybe add a raw ALLOC too)
     - GETELEM, SETELEM (hashtable ops)
@@ -26,15 +26,19 @@ asap:
 
 decisions:
 - decide on lookup model (bitmap seems fine, but i need to know the max U, so prob hashmap)
-- decide on another potential Value conversion (do i want to suck up the padding after all that fucking work to store some shit in the remaining 7 bytes)
+- decide on another potential Value conversion (do i want to suck up the padding after all that fucking work to store some shit in the remaining 7 bytes? this is only for the constant/global pool though, so only pre compilation)
 - decide on calling convention (still need to finalize. as of rn frames slot their args in the front registers, i could dedicate some, and i havent tested c native calling but it is pretty basic so should work. *out might contain pointer structures tho so i have to figure THAT out too... prolly the 2nd most complex besides header/heap and the most detail intensive)
-- decide on numeric types (how will i offer <64 bit ints, VM level or compiler level)
-- decide on error model (panic codes are runtime errors but i could just store a char* to a message and ref THAT. i think that may even be less overhead than dealing w it in vm_panic though i need to confirm no UAF/double free)
-- double check frame for opts (may jus stall. they work fine as is.)
+- decide on numeric types:
+  - how will i offer <64 bit ints, VM level or compiler level
+  - how will i offer >64 bit ints, 2 sequential slots or a pointer to a heap instance
+  - should i offer arbitrarily sized ints?
+- research how to get source references down to bytecode without bloating it
+- double check frame for opts (they work fine as is so idk what else besides reducing register swaps we can do)
 
 implementations (everything i can think of):
 - BYTECODE VERIFIER. this way we can avoid a bunch of runtime checks due to any issues being found BEFORE THEN!!!!
-- maybe include vs import? i mean if i have a preprocessor, or force compilation of every lib like most langs do nah, but my bytecode is portable i could allow deps, both ones that need to be bundled in and compiled (then can be used w a module system) and ones that r already compiled and can directly be used w wtv module system
+- include vs import:
+  - include -> **include** the 
 - vm dispatch loop (finalize some things to reduce cycle count and mem footprint. a lot of memcpys due to 9 byte vals in const/glob pool. might fucking plow thru all my work)
 - closures/upvalues/coroutines (scope escaping methods, i dont entirely understand them but we'll learn! we always do!)
 - native/ffi hooks (already have the basic callables just need to figure out how to call from the bytecode, and if the C function is stored in there and compiled on first run or if it comes from lib, which is dealt with at compile time)

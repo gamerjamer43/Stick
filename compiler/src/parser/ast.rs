@@ -182,6 +182,40 @@ pub enum BinOp {
     Shr,
 }
 
+// binop helpers (solves a lot of bad patterns)
+impl BinOp {
+    #[inline]
+    pub fn is_arithmetic(self) -> bool {
+        matches!(
+            self,
+            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Mod | Self::Power
+        )
+    }
+
+    #[inline]
+    pub fn is_bitwise(self) -> bool {
+        matches!(
+            self,
+            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr
+        )
+    }
+
+    #[inline]
+    pub fn is_comparison_or_logical(self) -> bool {
+        matches!(
+            self,
+            Self::Eq
+                | Self::NotEq
+                | Self::Less
+                | Self::LessEq
+                | Self::Greater
+                | Self::GreaterEq
+                | Self::And
+                | Self::Or
+        )
+    }
+}
+
 /// and the 3 unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {

@@ -318,27 +318,12 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         lhs_type: Type<'src>,
         rhs_type: Type<'src>,
     ) -> Option<Type<'src>> {
-        match op {
-            BinOp::Eq
-            | BinOp::NotEq
-            | BinOp::Less
-            | BinOp::LessEq
-            | BinOp::Greater
-            | BinOp::GreaterEq
-            | BinOp::And
-            | BinOp::Or => Some(Type::Bool),
-
-            BinOp::Add
-            | BinOp::Sub
-            | BinOp::Mul
-            | BinOp::Div
-            | BinOp::Mod
-            | BinOp::Power
-            | BinOp::BitAnd
-            | BinOp::BitOr
-            | BinOp::BitXor
-            | BinOp::Shl
-            | BinOp::Shr => self.common_numeric_type(lhs_type, rhs_type),
+        if op.is_comparison_or_logical() {
+            Some(Type::Bool)
+        } else if op.is_arithmetic() || op.is_bitwise() {
+            self.common_numeric_type(lhs_type, rhs_type)
+        } else {
+            None
         }
     }
 
@@ -458,32 +443,18 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 let rhs_type = self.infer_expr_type_with_hint(rhs, expected)?;
 
                 if let Some(expected) = expected {
-                    let matches_expected = match op {
-                        BinOp::Add
-                        | BinOp::Sub
-                        | BinOp::Mul
-                        | BinOp::Div
-                        | BinOp::Mod
-                        | BinOp::Power => {
-                            Self::numeric_rank(expected).is_some()
-                                && self.can_assign(expected, &lhs_type)
-                                && self.can_assign(expected, &rhs_type)
-                        }
-
-                        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
-                            Self::is_bitwise_numeric(expected)
-                                && self.can_assign(expected, &lhs_type)
-                                && self.can_assign(expected, &rhs_type)
-                        }
-
-                        BinOp::Eq
-                        | BinOp::NotEq
-                        | BinOp::Less
-                        | BinOp::LessEq
-                        | BinOp::Greater
-                        | BinOp::GreaterEq
-                        | BinOp::And
-                        | BinOp::Or => matches!(expected, Type::Bool),
+                    let matches_expected = if op.is_arithmetic() {
+                        Self::numeric_rank(expected).is_some()
+                            && self.can_assign(expected, &lhs_type)
+                            && self.can_assign(expected, &rhs_type)
+                    } else if op.is_bitwise() {
+                        Self::is_bitwise_numeric(expected)
+                            && self.can_assign(expected, &lhs_type)
+                            && self.can_assign(expected, &rhs_type)
+                    } else if op.is_comparison_or_logical() {
+                        matches!(expected, Type::Bool)
+                    } else {
+                        false
                     };
 
                     if matches_expected {

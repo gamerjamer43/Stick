@@ -1,5 +1,5 @@
 # rust shit
-/target/
+**/target/
 
 # log files
 *.log
