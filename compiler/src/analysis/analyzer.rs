@@ -866,11 +866,6 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 Stmt::Expr(expr) => {
                     let _ = self.infer_expr_type(&expr);
                 }
-                // Stmt::Expr(Expr::Call{ .. }) => self.check_call(&node),
-                // Stmt::Expr(Expr::Method { .. }) => self.check_method(&node),
-                // Stmt::Expr(Expr::While { .. }) => self.check_while(&node),
-                // Stmt::Expr(Expr::For { .. }) => self.check_for(&node),
-                // Stmt::Expr(Expr::Match { .. }) => self.check_match(&node),
                 // Stmt::Return( .. ) => self.check_return(&node),
                 // Stmt::Break => self.check_break(&node),
                 // Stmt::Continue => self.check_continue(&node),

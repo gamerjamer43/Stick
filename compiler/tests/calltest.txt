@@ -4,9 +4,13 @@ fn add(lhs: i32, rhs: i32) -> i32 {
     return lhs + rhs
 }
 
-let good = add(1, 2);
-let bad_ty = add(true, 2);
-let bad_arity = add(1);
+let good = add(1, 2)
+let bad_ty = add(true, 2)
+let bad_arity = add(1)
 
-let value = 5;
-let nope = value();
+let value = 5
+let nope = value()
+
+// confirmed this passes type checking
+add(1, 2)
+add(1, true)
