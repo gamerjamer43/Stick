@@ -1,14 +1,39 @@
-let i: i32 = (1 + (2 + 3))
+// immutable bindings should throw an error when reassigned
+let imm = 1
+imm = 2
 
-// should coerce to i64 (for rn)
-let j = 1
+// mutable bindings... yeah
+let mutable m: i8 = 1
+m = 2
 
-let k: i32 = j + 1
+// immutable bindings shouldn't mutate on unary ops either
+let imm_counter: i8 = 1
+imm_counter++
 
-// should coerce to an i64
-let l = k + j
+// mutable bindings should be... well.. mutable
+let mutable counter: i8 = 1
+counter++
 
-let j = {
-    let temp = k + 1
-    temp
+// first reassignment should work
+let mutable a: i8 = 1
+a = 2
+
+// block should resolve properly due to constant folding
+a = {
+    let inner = 3
+    inner
 }
+
+// should overflow the i8
+a = 128
+
+// should fail to assign (type mismatch)
+let mutable b: bool = false
+b = 1
+
+// first add should work
+let mutable c: i8 = 1
+c += 2
+
+// second should overload
+c += 200

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::{
-    error::{Diagnostic, SemanticError, SyntaxError, SemanticError::*, SyntaxError::*},
-    parser::ast::{AssignOp, BinOp, Expr, Literal, Stmt, Type, UnaryOp},
+    error::{Diagnostic, SemanticError, SemanticError::*, SyntaxError, SyntaxError::*},
+    parser::ast::{AssignOp, BinOp, Expr, LeftSide, Literal, Stmt, Type, UnaryOp},
 };
 
 #[derive(Debug, Clone)]
@@ -23,9 +23,12 @@ pub struct Analyzer<'a, 'src> {
     pub nodes: Vec<Stmt<'src>>,
     pub resolved: HashMap<&'src str, usize>, // usize contains a unique symbol id
     pub types: HashMap<&'src str, Type<'src>>,
-    values: HashMap<&'src str, ConstValue>,
     pub errors: Vec<Diagnostic<'a, 'src>>,
     pub pos: usize,
+
+    // mutability is now also tracked (cuz i forgot to do that)
+    mutability: HashMap<&'src str, bool>,
+    values: HashMap<&'src str, ConstValue>,
 }
 
 impl<'a, 'src> Analyzer<'a, 'src> {
@@ -40,6 +43,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             nodes,
             resolved: HashMap::new(),
             types: HashMap::new(),
+            mutability: HashMap::new(),
             values: HashMap::new(),
             errors: Vec::new(),
             pos: 0,
@@ -77,6 +81,15 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 .map(|expr| self.span_for_expr(expr))
                 .unwrap_or(0..0),
             _ => 0..0,
+        }
+    }
+
+    // properly span lhs on error (this was buggin b4)
+    fn span_for_left_side(&self, lhs: &LeftSide<'src>) -> Range<usize> {
+        match lhs {
+            LeftSide::Var(ident) => self.span_for_ident(ident),
+            LeftSide::Field { name, .. } => self.span_for_ident(name),
+            LeftSide::Subscript { obj, .. } => self.span_for_expr(obj),
         }
     }
 
@@ -121,6 +134,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    /// in the case a constant can be folded, it will
     fn eval_const(&self, expr: &Expr<'src>) -> Option<ConstValue> {
         use BinOp::*;
         use ConstValue::*;
@@ -157,8 +171,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                     (Mul, Float(a), Float(b)) => Some(Float(a * b)),
 
                     // div and mod by zero return none
-                    (Div, Float(_,), Float(0.0)) => None,
-                    (Mod, Float(_,), Float(0.0)) => None,
+                    (Div, Float(_), Float(0.0)) => None,
+                    (Mod, Float(_), Float(0.0)) => None,
                     (Div, Float(a), Float(b)) => Some(Float(a / b)),
                     (Mod, Float(a), Float(b)) => Some(Float(a % b)),
 
@@ -187,7 +201,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             // for blocks: check tail (TODO: below is a stubbed check_block)
             Expr::Block { tail, .. } => tail.as_ref().and_then(|expr| self.eval_const(expr)),
 
-            // check conditions 
+            // check conditions
             Expr::If { cond, then, else_ } => match self.eval_const(cond)? {
                 Bool(true) => self.eval_const(then),
                 Bool(false) => else_.as_ref().and_then(|expr| self.eval_const(expr)),
@@ -208,11 +222,31 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             (Type::U32, ConstValue::Int(value)) => u32::try_from(*value).is_ok(),
             (Type::U64, ConstValue::Int(value)) => u64::try_from(*value).is_ok(),
             (Type::F32 | Type::F64, ConstValue::Int(_)) => true,
-            (Type::F32 | Type::F64, ConstValue::Float(_)) => true,
+            (Type::F32 | Type::F64, ConstValue::Float(value)) => {
+                !self.const_overflows_declared(declared, &ConstValue::Float(*value))
+            }
             (Type::Bool, ConstValue::Bool(_)) => true,
             (Type::Char, ConstValue::Char) => true,
             (Type::Str, ConstValue::String) => true,
             (Type::Unit, ConstValue::Unit) => true,
+            _ => false,
+        }
+    }
+
+    fn const_overflows_declared(&self, declared: &Type<'src>, value: &ConstValue) -> bool {
+        match (declared, value) {
+            (Type::I8, ConstValue::Int(value)) => i8::try_from(*value).is_err(),
+            (Type::I16, ConstValue::Int(value)) => i16::try_from(*value).is_err(),
+            (Type::I32, ConstValue::Int(value)) => i32::try_from(*value).is_err(),
+            (Type::I64, ConstValue::Int(value)) => i64::try_from(*value).is_err(),
+            (Type::U8, ConstValue::Int(value)) => u8::try_from(*value).is_err(),
+            (Type::U16, ConstValue::Int(value)) => u16::try_from(*value).is_err(),
+            (Type::U32, ConstValue::Int(value)) => u32::try_from(*value).is_err(),
+            (Type::U64, ConstValue::Int(value)) => u64::try_from(*value).is_err(),
+            (Type::F32, ConstValue::Float(value)) => {
+                !value.is_finite() || *value < f32::MIN as f64 || *value > f32::MAX as f64
+            }
+            (Type::F64, ConstValue::Float(value)) => !value.is_finite(),
             _ => false,
         }
     }
@@ -274,6 +308,81 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    fn resolve_assign_target(&mut self, lhs: &LeftSide<'src>) -> Option<(&'src str, Type<'src>)> {
+        match lhs {
+            LeftSide::Var(ident) => {
+                let typ = match self.types.get(ident.0).cloned() {
+                    Some(typ) => typ,
+                    None => {
+                        self.push_error(
+                            self.span_for_ident(ident),
+                            Semantic(UnknownIdentifier(ident.0)),
+                        );
+                        return None;
+                    }
+                };
+
+                if !self.binding_is_mutable(ident.0) {
+                    self.push_error(
+                        self.span_for_ident(ident),
+                        Semantic(ImmutableBinding(ident.0)),
+                    );
+                    return None;
+                }
+
+                Some((ident.0, typ))
+            }
+
+            LeftSide::Field { .. } | LeftSide::Subscript { .. } => {
+                self.push_error(
+                    self.span_for_left_side(lhs),
+                    Semantic(InvalidOperation(
+                        "assignment analysis currently only supports plain variable targets",
+                    )),
+                );
+                None
+            }
+        }
+    }
+
+    fn binding_is_mutable(&self, name: &'src str) -> bool {
+        self.mutability.get(name).copied().unwrap_or(false)
+    }
+
+    fn require_mutable_ident(&mut self, ident: &crate::parser::ast::Ident<'src>) -> bool {
+        if !self.binding_is_mutable(ident.0) {
+            self.push_error(
+                self.span_for_ident(ident),
+                Semantic(ImmutableBinding(ident.0)),
+            );
+            return false;
+        }
+
+        true
+    }
+
+    fn check_unary_mutation(&mut self, op: &UnaryOp, expr: &Expr<'src>) -> bool {
+        if !matches!(
+            op,
+            UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
+        ) {
+            return true;
+        }
+
+        match expr {
+            Expr::Ident(ident) => self.require_mutable_ident(ident),
+            _ => {
+                self.push_error(
+                    self.span_for_expr(expr),
+                    Semantic(InvalidOperation(
+                        "increment and decrement require a mutable variable target",
+                    )),
+                );
+                false
+            }
+        }
+    }
+
     fn infer_unary_type(&self, op: &UnaryOp, inner: Type<'src>) -> Option<Type<'src>> {
         match op {
             UnaryOp::Not => Some(Type::Bool),
@@ -332,38 +441,129 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         &mut self,
         then: &Expr<'src>,
         else_: &Option<Box<Expr<'src>>>,
+        expected: Option<&Type<'src>>,
     ) -> Option<Type<'src>> {
-        let then_type = self.infer_expr_type(then)?;
+        let then_type = self.infer_expr_type_with_hint(then, expected)?;
         let else_expr = else_.as_ref()?;
-        let else_type = self.infer_expr_type(else_expr)?;
+        let else_type = self.infer_expr_type_with_hint(else_expr, expected)?;
 
         if then_type == else_type {
             Some(then_type)
         } else {
             self.push_error(
                 self.span_for_expr(then),
-                Semantic(TypeMismatch(
-                    "if branches must evaluate to the same type",
-                )),
+                Semantic(TypeMismatch("if branches must evaluate to the same type")),
             );
             None
         }
     }
 
-    // match assignments
-    fn infer_assign_type(&self, op: &AssignOp, rhs_type: Type<'src>) -> Option<Type<'src>> {
+    // ensure a value can be properly assigned to a type
+    fn check_assign_compatibility(
+        &self,
+        op: &AssignOp,
+        target_type: &Type<'src>,
+        rhs_type: &Type<'src>,
+    ) -> Result<(), SemanticError<'src>> {
         match op {
-            AssignOp::Assign
-            | AssignOp::PlusEq
+            AssignOp::Assign if self.can_assign(target_type, rhs_type) => Ok(()),
+            AssignOp::Assign => Err(TypeMismatch(
+                "assigned value is not assignable to the target type",
+            )),
+
+            AssignOp::PlusEq
             | AssignOp::MinusEq
             | AssignOp::StarEq
             | AssignOp::SlashEq
             | AssignOp::PercentEq
-            | AssignOp::AndEq
+                if Self::numeric_rank(target_type).is_some()
+                    && self.can_assign(target_type, rhs_type) =>
+            {
+                Ok(())
+            }
+
+            AssignOp::PlusEq
+            | AssignOp::MinusEq
+            | AssignOp::StarEq
+            | AssignOp::SlashEq
+            | AssignOp::PercentEq => Err(InvalidOperation(
+                "compound arithmetic assignment requires a numeric target and compatible value",
+            )),
+
+            AssignOp::AndEq
             | AssignOp::OrEq
             | AssignOp::XorEq
             | AssignOp::ShlEq
-            | AssignOp::ShrEq => Some(rhs_type),
+            | AssignOp::ShrEq
+                if Self::is_bitwise_numeric(target_type)
+                    && self.can_assign(target_type, rhs_type) =>
+            {
+                Ok(())
+            }
+
+            AssignOp::AndEq
+            | AssignOp::OrEq
+            | AssignOp::XorEq
+            | AssignOp::ShlEq
+            | AssignOp::ShrEq => Err(InvalidOperation(
+                "bitwise assignment requires an integral target and compatible value",
+            )),
+        }
+    }
+
+    // store the updated value in the value pool (store_const_value is poorly named)
+    fn store_assignment_value(
+        &mut self,
+        name: &'src str,
+        op: &AssignOp,
+        typ: &Type<'src>,
+        value: Option<ConstValue>,
+    ) {
+        match op {
+            AssignOp::Assign => self.store_const_value(name, typ, value),
+            _ => {
+                self.values.remove(name);
+            }
+        }
+    }
+
+    fn check_assign_expr(
+        &mut self,
+        op: &AssignOp,
+        lhs: &LeftSide<'src>,
+        rhs: &Expr<'src>,
+    ) -> Option<Type<'src>> {
+        let (name, target_type) = self.resolve_assign_target(lhs)?;
+        let inferred_rhs_type = self.infer_expr_type_with_hint(rhs, Some(&target_type))?;
+        let folded_rhs = self.eval_const(rhs);
+        let rhs_type = if folded_rhs
+            .as_ref()
+            .is_some_and(|value| self.can_coerce_const_to_declared(&target_type, value))
+        {
+            target_type.clone()
+        } else {
+            inferred_rhs_type
+        };
+
+        match self.check_assign_compatibility(op, &target_type, &rhs_type) {
+            Ok(()) => {
+                self.store_assignment_value(name, op, &target_type, folded_rhs);
+                Some(target_type)
+            }
+
+            Err(err) => {
+                let err = if folded_rhs
+                    .as_ref()
+                    .is_some_and(|value| self.const_overflows_declared(&target_type, value))
+                {
+                    Overflow("assigned constant overflows the target type")
+                } else {
+                    err
+                };
+
+                self.push_error(self.span_for_expr(rhs), Semantic(err));
+                None
+            }
         }
     }
 
@@ -424,6 +624,9 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
             Expr::Unary { op, expr } => {
                 let inner = self.infer_expr_type_with_hint(expr, expected)?;
+                if !self.check_unary_mutation(op, expr) {
+                    return None;
+                }
                 match self.infer_unary_type(op, inner) {
                     Some(typ) => Some(typ),
                     None => {
@@ -476,17 +679,13 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 }
             }
 
-            Expr::Assign { op, lhs: _, rhs } => {
-                let rhs_type = self.infer_expr_type_with_hint(rhs, expected)?;
+            Expr::Assign { op, lhs, rhs } => self.check_assign_expr(op, lhs, rhs),
 
-                self.infer_assign_type(op, rhs_type)
+            Expr::Block { stmts, tail } => {
+                self.analyze_block_expr(stmts, tail.as_deref(), expected)
             }
 
-            Expr::Block { tail, .. } => tail
-                .as_ref()
-                .and_then(|t| self.infer_expr_type_with_hint(t, expected)),
-
-            Expr::If { then, else_, .. } => self.infer_if_type(then, else_),
+            Expr::If { then, else_, .. } => self.infer_if_type(then, else_, expected),
 
             _ => None,
         }
@@ -496,29 +695,26 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         self.infer_expr_type_with_hint(expr, None)
     }
 
-    // run thru each statement in a block and ensure it works
-    fn check_block(&mut self, node: &Stmt<'src>) {
-        let Stmt::Expr(Expr::Block { stmts, tail }) = node else {
-            return;
-        };
-
-        for stmt in stmts.clone() {
+    fn analyze_block_expr(
+        &mut self,
+        stmts: &[Stmt<'src>],
+        tail: Option<&Expr<'src>>,
+        expected: Option<&Type<'src>>,
+    ) -> Option<Type<'src>> {
+        for stmt in stmts {
             match stmt {
-                Stmt::VarDecl { .. } => self.check_decl(&stmt),
-                Stmt::Expr(Expr::Block { .. }) => self.check_block(&stmt),
+                Stmt::VarDecl { .. } => self.check_decl(stmt),
                 Stmt::Expr(expr) => {
-                    let _ = self.infer_expr_type(&expr);
+                    let _ = self.infer_expr_type(expr);
                 }
                 Stmt::Return(Some(expr)) => {
-                    let _ = self.infer_expr_type(&expr);
+                    let _ = self.infer_expr_type(expr);
                 }
                 _ => {}
             }
         }
 
-        if let Some(tail_expr) = tail.as_deref() {
-            let _ = self.infer_expr_type(tail_expr);
-        }
+        tail.and_then(|tail_expr| self.infer_expr_type_with_hint(tail_expr, expected))
     }
 
     // in declarations, check for the following:
@@ -528,7 +724,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             name,
             typ,
             init,
-            mutable: _,
+            mutable,
             constant: _,
             global: _,
         } = node
@@ -578,15 +774,17 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
         self.store_const_value(name.0, &resolved_type, folded_init);
         self.types.insert(name.0, resolved_type);
+        self.mutability.insert(name.0, *mutable);
     }
 
     pub fn analyze(&mut self) {
         while let Some(node) = self.cur().cloned() {
             match node {
-                Stmt::Expr(Expr::Block { .. }) => self.check_block(&node),
-
-                // Stmt::Expr(Expr::Assign { .. }) => self.check_assign(&node),
+                Stmt::Expr(expr) => {
+                    let _ = self.infer_expr_type(&expr);
+                }
                 // Stmt::Expr(Expr::Call{ .. }) => self.check_call(&node),
+
                 // Stmt::Return( .. ) => self.check_return(&node),
 
                 // Stmt::FuncDecl { .. } => self.check_func(&node),

@@ -39,6 +39,7 @@ impl<'src> SyntaxError<'src> {
             SyntaxError::Lex(_) => {
                 "lexer errors are only caused by things that would cause issues in tokenization."
             }
+
             SyntaxError::Parse(e) => match e {
                 ParseError::MissingExpected(msg) => {
                     if msg.starts_with("expected type") {
@@ -81,8 +82,14 @@ impl<'src> SyntaxError<'src> {
                 SemanticError::UnknownIdentifier(_) => {
                     "declare the identifier before use, or fix the identifier name"
                 }
+                SemanticError::ImmutableBinding(_) => {
+                    "mark the declaration mutable before reassigning it, or stop mutating the binding"
+                }
                 SemanticError::InvalidOperation(_) => {
                     "check operator and operand types, not all operators can apply to all types."
+                }
+                SemanticError::Overflow(_) => {
+                    "reduce the constant value, widen the destination type, or make the value explicit in a larger type first"
                 }
             },
             SyntaxError::Unknown => "Only god can save you (or reading the docs lmao.)",

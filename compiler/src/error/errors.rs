@@ -48,7 +48,9 @@ pub enum SemanticError<'src> {
     TypeInference(&'src str),
     TypeMismatch(&'src str),
     UnknownIdentifier(&'src str),
+    ImmutableBinding(&'src str),
     InvalidOperation(&'src str),
+    Overflow(&'src str),
 }
 
 /// unified place to hold any error that may happen during compile time
@@ -62,52 +64,48 @@ pub enum SyntaxError<'src> {
     Unknown,
 }
 
-// TODO: fix this nesting (and some others, GOD...)
+impl Display for LexError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        use LexError::*;
+        match self {
+            UnterminatedString(s) => write!(f, "{s} is missing a closing \""),
+            UnterminatedChar(s) => write!(f, "{s} is missing a closing '"),
+            UnknownToken(s) => write!(f, "the hanging symbol '{s}' is not in the language spec."),
+        }
+    }
+}
+
+impl Display for ParseError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        use ParseError::*;
+        match self {
+            MissingExpected(s) => write!(f, "missing a value where expected, {s}"),
+            ConstDisallowed(s) => {
+                write!(f, "const cannot be used with some modifiers: {s}")
+            }
+        }
+    }
+}
+
+impl Display for SemanticError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        use SemanticError::*;
+        match self {
+            TypeInference(s) => write!(f, "failed to infer type for {s}"),
+            UnknownIdentifier(s) => write!(f, "identifier hasnt been declared yet {s}"),
+            ImmutableBinding(s) => write!(f, "cannot mutate immutable binding {s}"),
+            Overflow(s) => write!(f, "potentially implement a bounds check! {s}"),
+            TypeMismatch(s) | InvalidOperation(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 impl Display for SyntaxError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            // lex errors
-            SyntaxError::Lex(le) => {
-                use LexError::*;
-                match le {
-                    UnterminatedString(s) => write!(
-                        f,
-                        "\x1b[1mUnterminatedString:\x1b[22m Strings must be properly terminated, {s} is missing termination"
-                    ),
-
-                    UnterminatedChar(s) => write!(
-                        f,
-                        "\x1b[1mUnterminatedChar:\x1b[22m Chars must be properly terminated, {s} is missing termination"
-                    ),
-
-                    UnknownToken(s) => write!(
-                        f,
-                        "\x1b[1mUnknownToken:\x1b[22m The character '{s}' is not in the grammar for this language."
-                    ),
-                }
-            }
-
-            // parse errors
-            SyntaxError::Parse(pe) => {
-                use ParseError::*;
-                match &pe {
-                    MissingExpected(s) => write!(f, "missing a value where expected, {s}"),
-                    ConstDisallowed(s) => {
-                        write!(f, "const cannot be used with some modifiers: {s}")
-                    }
-                }
-            }
-
-            // semantic errors
-            SyntaxError::Semantic(se) => {
-                use SemanticError::*;
-                match &se {
-                    TypeInference(s) => write!(f, "type inference failed: {s}"),
-                    TypeMismatch(s) => write!(f, "type mismatch: {s}"),
-                    UnknownIdentifier(s) => write!(f, "unknown identifier: {s}"),
-                    InvalidOperation(s) => write!(f, "invalid operation: {s}"),
-                }
-            }
+            SyntaxError::Lex(le) => write!(f, "{le}"),
+            SyntaxError::Parse(pe) => write!(f, "{pe}"),
+            SyntaxError::Semantic(se) => write!(f, "{se}"),
 
             // catchall == unknown
             SyntaxError::Unknown => write!(

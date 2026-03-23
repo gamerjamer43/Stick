@@ -2,5 +2,4 @@
 # if you don't have the toolchain do `rustup toolchain install nightly`
 ignore = [
     "src/lexer/token.rs",
-    "src/lexer/error.rs",
 ]
