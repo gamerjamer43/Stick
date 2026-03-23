@@ -216,6 +216,7 @@ impl<'src, 't> Parser<'src, 't> {
         match self.cur() {
             Some(
                 Token::LParen
+                | Token::Unit // every language of mine has one fucky thing... unit is used for calls
                 | Token::LBracket
                 | Token::Dot
                 | Token::Arrow
@@ -229,13 +230,19 @@ impl<'src, 't> Parser<'src, 't> {
     fn apply_postfix(&mut self, left: &mut Expr<'src>) {
         let current = std::mem::replace(left, Expr::Unknown);
 
-        if self.matches(&Token::LParen) {
-            self.advance();
-            let args = self.parse_call_args();
-            self.expect_msg(
-                |t: &Token<'_>| matches!(t, Token::RParen),
-                "expected ')' to close function call",
-            );
+        if self.matches_any(&[Token::LParen, Token::Unit]) {
+            let args = if self.matches(&Token::LParen) {
+                self.advance();
+                let args = self.parse_call_args();
+                self.expect_msg(
+                    |t: &Token<'_>| matches!(t, Token::RParen),
+                    "expected ')' to close function call",
+                );
+                args
+            } else {
+                self.advance();
+                Vec::new()
+            };
 
             *left = match current {
                 Expr::Field { obj, name } => Expr::Method {

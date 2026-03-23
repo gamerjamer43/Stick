@@ -40,11 +40,10 @@ impl<'src> SyntaxError<'src> {
                 "lexer errors are only caused by things that would cause issues in tokenization."
             }
 
+            // every way i look at flattening this just gets more gross
             SyntaxError::Parse(e) => match e {
                 ParseError::MissingExpected(msg) => {
-                    if msg.starts_with("expected type") {
-                        "either omit the colon, or specify a type (if it's a decl without a right hand side, you MUST specify type)"
-                    } else if msg.starts_with("let must have") {
+                    if msg.starts_with("let must have") {
                         "if you want to discard the value, use _, otherwise attach a name"
                     } else if msg.starts_with("type cannot be") {
                         "either declare the type beforehand, or add a right hand side and let the compiler infer it."
@@ -92,6 +91,7 @@ impl<'src> SyntaxError<'src> {
                     "reduce the constant value, widen the destination type, or make the value explicit in a larger type first"
                 }
             },
+            
             SyntaxError::Unknown => "Only god can save you (or reading the docs lmao.)",
         }
     }

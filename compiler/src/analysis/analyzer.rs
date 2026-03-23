@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 use std::ops::Range;
 
 use crate::{
@@ -458,6 +458,82 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    // resolve the declared type of a function
+    fn declared_func_type(&self, name: &'src str) -> Option<Type<'src>> {
+        self.nodes.iter().find_map(|stmt| match stmt {
+            Stmt::FuncDecl {
+                name: func_name,
+                typ,
+                args,
+                ..
+            } if func_name.0 == name => Some(Type::Func {
+                params: args.iter().map(|(_, typ)| typ.clone()).collect(),
+                ret: Box::new(typ.clone()),
+            }),
+            _ => None,
+        })
+    }
+
+    // helps to ensure when a callable is assigned to something, its of the proper type
+    fn resolve_callable_type(&mut self, func: &Expr<'src>) -> Option<Type<'src>> {
+        match func {
+            Expr::Ident(ident) => {
+                if let Some(found) = self.types.get(ident.0).cloned() {
+                    Some(found)
+                } else if let Some(found) = self.declared_func_type(ident.0) {
+                    Some(found)
+                } else {
+                    self.push_error(
+                        self.span_for_ident(ident),
+                        Semantic(UnknownIdentifier(ident.0)),
+                    );
+                    None
+                }
+            }
+            _ => self.infer_expr_type(func),
+        }
+    }
+
+    // ensure all argument types match (and arg count as well)
+    fn check_call(&mut self, func: &Expr<'src>, args: &[Expr<'src>]) -> Option<Type<'src>> {
+        let callable = self.resolve_callable_type(func)?;
+
+        let Type::Func { params, ret } = callable else {
+            self.push_error(
+                self.span_for_expr(func),
+                Semantic(InvalidOperation("attempted to call a non-function value")),
+            );
+            return None;
+        };
+
+        if params.len() != args.len() {
+            self.push_error(
+                self.span_for_expr(func),
+                Semantic(InvalidOperation(
+                    "function call argument count does not match parameter count",
+                )),
+            );
+            return None;
+        }
+
+        for (arg, param) in args.iter().zip(params.iter()) {
+            let actual = self.infer_expr_type_with_hint(arg, Some(param))?;
+            let assignable = matches!(param, Type::Inferred) || self.can_assign(param, &actual);
+
+            if !assignable {
+                self.push_error(
+                    self.span_for_expr(arg),
+                    Semantic(TypeMismatch(
+                        "function argument type is not assignable to parameter type",
+                    )),
+                );
+                return None;
+            }
+        }
+
+        Some(*ret)
+    }
+
     // ensure a value can be properly assigned to a type
     fn check_assign_compatibility(
         &self,
@@ -527,6 +603,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    // make sure assignments can be done (mutability and type check)
     fn check_assign_expr(
         &mut self,
         op: &AssignOp,
@@ -567,6 +644,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    // ensure a literal can be coerced to the type its being reassigned to
     fn can_coerce_literal_to_declared(
         &self,
         declared: &Type<'src>,
@@ -679,6 +757,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 }
             }
 
+            Expr::Call { func, args } => self.check_call(func, args),
+
             Expr::Assign { op, lhs, rhs } => self.check_assign_expr(op, lhs, rhs),
 
             Expr::Block { stmts, tail } => {
@@ -695,6 +775,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         self.infer_expr_type_with_hint(expr, None)
     }
 
+    // analyze every statement inside of a block
     fn analyze_block_expr(
         &mut self,
         stmts: &[Stmt<'src>],
@@ -778,16 +859,24 @@ impl<'a, 'src> Analyzer<'a, 'src> {
     }
 
     pub fn analyze(&mut self) {
+        let start: Instant = Instant::now();
+        
         while let Some(node) = self.cur().cloned() {
             match node {
                 Stmt::Expr(expr) => {
                     let _ = self.infer_expr_type(&expr);
                 }
                 // Stmt::Expr(Expr::Call{ .. }) => self.check_call(&node),
-
+                // Stmt::Expr(Expr::Method { .. }) => self.check_method(&node),
+                // Stmt::Expr(Expr::While { .. }) => self.check_while(&node),
+                // Stmt::Expr(Expr::For { .. }) => self.check_for(&node),
+                // Stmt::Expr(Expr::Match { .. }) => self.check_match(&node),
                 // Stmt::Return( .. ) => self.check_return(&node),
-
+                // Stmt::Break => self.check_break(&node),
+                // Stmt::Continue => self.check_continue(&node),
                 // Stmt::FuncDecl { .. } => self.check_func(&node),
+                // Stmt::Error => self.check_stmt_error(&node),
+                
                 Stmt::VarDecl { .. } => self.check_decl(&node),
 
                 _ => {}
@@ -795,6 +884,12 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
             self.pos += 1;
         }
+
+        println!(
+            "Analyzed {} symbols in {}s.",
+            self.resolved.len(), 
+            start.elapsed().as_secs_f64()
+        );
 
         if !self.errors.is_empty() {
             for error in &self.errors {
