@@ -21,12 +21,14 @@
 #define MARK_WHITE 0   // proven unreachable (or not yet seen)
 #define MARK_GRAY  1   // reachable but children not scanned
 #define MARK_BLACK 2   // reachable and fully scanned
+#define MARK_FREE  3   // slot is dead and available for reuse
 
 // default initial capacity per bucket
 #define DEFAULT_BUCKET_CAP 64
 
 // only invalid pointer sequence is all 1s
 #define HEAP_REF_NULL 0xFFFFFFFF
+#define BUCKET_FREE_NONE 0xFFFFFFFFu
 
 // 24 bit slot limit cuz we need 8 bits for the type
 #define HEAP_MAX_SLOTS 0x00FFFFFF
@@ -83,9 +85,11 @@ typedef enum {
 typedef struct {
     u8*  data;          // raw memory block (slots)
     u64* marks;         // 2 bits marking (00, 01, 10) per slot (32 per u64, then double)
+    u64* dirty;         // mutated old containers that must be rescanned during minor GC
+    u64* old;           // per-slot generation bit (1 = old, 0 = young)
     u32  capacity;      // total slots allocated
     u32  used;          // bump pointer (next free index)
-    u32  old_boundary;  // slots [0, old_boundary) are old gen, [old_boundary, used) are children
+    u32  free_head;     // head of the per-bucket free list
     u16  slot_size;     // bytes per slot
     u8   type;          // HeapType enum
     u8   _pad;          // alignment padding (was generation but it got replaced, idk what imma put here now)
@@ -149,7 +153,7 @@ bool  bucket_init(Bucket* b, u8 type, u16 slot_size, u32 initial_capacity);
 void  bucket_free(Bucket* b);
 bool  bucket_grow(Bucket* b);
 
-void* bucket_alloc(Bucket* b);
+void* bucket_alloc(Bucket* b, u32* index);
 void* bucket_get(Bucket* b, u32 index);
 void  bucket_clear_marks(Bucket* b); // mark all items in a bucket as white
 
@@ -177,7 +181,10 @@ static inline bool heapref_is_valid(Heap* h, HeapRef ref) {
     if (!b->data || !b->marks) return false;
 
     // check if there's room
-    return heapref_slot(ref) < b->used;
+    u32 slot = heapref_slot(ref);
+    if (slot >= b->used) return false;
+
+    return (((b->marks[slot / 32] >> ((slot % 32) * 2)) & 0x3) != MARK_FREE);
 }
 
 // mark a reference by color
@@ -204,6 +211,60 @@ static inline u8 heap_get_color(Heap* h, HeapRef ref) {
 
     return (b->marks[slot / 32] >> // pick the correct slot
         ((slot % 32) * 2)) & 0x3;  // move to bottom and keep bottom 2 bits
+}
+
+static inline bool bucket_get_bit(const u64* bits, u32 slot) {
+    return bits && ((bits[slot / 64] >> (slot % 64)) & 0x1ULL);
+}
+
+static inline void bucket_set_bit(u64* bits, u32 slot, bool on) {
+    if (!bits) return;
+
+    u32 word = slot / 64;
+    u32 off = slot % 64;
+    if (on) bits[word] |= (1ULL << off);
+    else bits[word] &= ~(1ULL << off);
+}
+
+static inline bool bucket_is_old(const Bucket* b, u32 slot) {
+    return b && bucket_get_bit(b->old, slot);
+}
+
+static inline void bucket_set_old(Bucket* b, u32 slot, bool old) {
+    if (!b) return;
+    bucket_set_bit(b->old, slot, old);
+}
+
+static inline bool bucket_is_dirty(const Bucket* b, u32 slot) {
+    return b && bucket_get_bit(b->dirty, slot);
+}
+
+static inline void bucket_set_dirty(Bucket* b, u32 slot, bool dirty) {
+    if (!b) return;
+    bucket_set_bit(b->dirty, slot, dirty);
+}
+
+static inline bool heapref_is_old(Heap* h, HeapRef ref) {
+    if (!heapref_is_valid(h, ref)) return false;
+
+    Bucket* b = &h->buckets[heapref_type(ref)];
+    return bucket_is_old(b, heapref_slot(ref));
+}
+
+static inline void heap_mark_dirty(Heap* h, HeapRef ref) {
+    if (!heapref_is_valid(h, ref)) return;
+
+    Bucket* b = &h->buckets[heapref_type(ref)];
+    u32 slot = heapref_slot(ref);
+    if (!bucket_is_old(b, slot)) return;
+    bucket_set_dirty(b, slot, true);
+}
+
+static inline void heap_clear_dirty(Heap* h, HeapRef ref) {
+    if (!heapref_is_valid(h, ref)) return;
+
+    Bucket* b = &h->buckets[heapref_type(ref)];
+    bucket_set_dirty(b, heapref_slot(ref), false);
 }
 
 static inline void heap_mark_gray(Heap* h, HeapRef ref) {
@@ -235,8 +296,11 @@ static inline void heap_mark_gray(Heap* h, HeapRef ref) {
 static inline void bucket_clear_young_marks(Bucket* b) {
     if (!b || !b->marks) return;
 
-    for (u32 j = b->old_boundary; j < b->used; j++) {
+    for (u32 j = 0; j < b->used; j++) {
+        if (bucket_is_old(b, j)) continue;
+
         u32 w = j / 32, off = (j % 32) * 2;
+        if (((b->marks[w] >> off) & 0x3) == MARK_FREE) continue;
         b->marks[w] &= ~(0x3ULL << off);
     }
 }
@@ -265,8 +329,11 @@ static inline void heap_protect_old(Heap* h) {
         Bucket* b = &h->buckets[i];
         if (!b->data || !b->marks) continue;
 
-        for (u32 j = 0; j < b->old_boundary; j++) {
+        for (u32 j = 0; j < b->used; j++) {
+            if (!bucket_is_old(b, j)) continue;
+
             u32 w = j / 32, off = (j % 32) * 2;
+            if (((b->marks[w] >> off) & 0x3) == MARK_FREE) continue;
             b->marks[w] = (b->marks[w] & ~(0x3ULL << off))
                 | ((u64)MARK_BLACK << off);
         }
@@ -284,10 +351,31 @@ static inline void heap_begin_major_gc(Heap* h) {
 // begin a MINOR GC cycle (only young objects)
 static inline void heap_begin_minor_gc(Heap* h) {
     if (!h) return;
-    heap_clear_young_marks(h);
-    heap_protect_old(h);
     h->gray_count = 0;
     h->gc_state = GC_MARK;
+
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        if (!b->data || !b->marks) continue;
+
+        for (u32 j = 0; j < b->used; j++) {
+            u32 w = j / 32, off = (j % 32) * 2;
+            u8 color = (b->marks[w] >> off) & 0x3;
+            if (color == MARK_FREE) continue;
+
+            if (bucket_is_old(b, j)) {
+                HeapRef ref = heapref_make(b->type, j);
+                if (bucket_is_dirty(b, j)) {
+                    heap_set_color(h, ref, MARK_WHITE);
+                    heap_mark_gray(h, ref);
+                } else {
+                    heap_set_color(h, ref, MARK_BLACK);
+                }
+            } else {
+                heap_set_color(h, heapref_make(b->type, j), MARK_WHITE);
+            }
+        }
+    }
 }
 
 // if above threshold return true

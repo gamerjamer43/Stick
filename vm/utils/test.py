@@ -495,6 +495,13 @@ TESTS += [
         LOADC(0, 1), ins(Opcode.TAILCALL, 0, 0),  # tailcall B
         LOADI(0, 123), ins(Opcode.RET, 0)         # func B returns 123
     ], consts=(func(5, 0, 4), func(7, 0, 4))),
+
+    # bytecode CALL should copy args into the callee register window
+    TestCase(Opcode.CALL, "call_arg_copy", [
+        LOADC(0, 0), LOADC(1, 1), ins(Opcode.CALL, 0, 1, 2),
+        LOADC(3, 1), BIN(Opcode.EQ, 4, 2, 3), JMPIFZ(4, 1), HALT(), PANIC(),
+        ins(Opcode.RET, 0)
+    ], consts=(func(8, 1, 2), i64(42))),
 ]
 
 
@@ -641,6 +648,32 @@ TESTS.append(pass_if_truthy(Opcode.CONCAT, "bonus_concat_empty_lhs", [
     CONCAT_OP(2, 0, 1), STRLEN_OP(3, 2),
     LOADC(4, 0), BIN(Opcode.EQ_U, 5, 3, 4)
 ], 5, consts=(u64(3),)))
+
+# exercise a minor GC edge case: an old array points at a young string
+gc_words = [
+    LOADI(1, 1),
+    NEWARR(0, Type.OBJ, 1),
+]
+gc_words += [word for _ in range(100) for word in NEWSTR_WORDS(5, b"x")]
+while len(gc_words) < 1030:
+    gc_words.append(LOADI(15, 0))
+gc_words += [
+    *NEWSTR_WORDS(1, b"A"),
+    LOADI(2, 0),
+    ARRSET(0, 2, 1),
+]
+gc_words += [word for _ in range(100) for word in NEWSTR_WORDS(5, b"y")]
+while len(gc_words) < 2065:
+    gc_words.append(LOADI(15, 0))
+gc_words += [
+    *NEWSTR_WORDS(4, b""),
+    ARRGET(3, 0, 2),
+    CONCAT_OP(6, 3, 4),
+    STRLEN_OP(7, 6),
+    LOADC(8, 0),
+    BIN(Opcode.EQ_U, 9, 7, 8),
+]
+TESTS.append(pass_if_truthy(Opcode.CONCAT, "gc_old_to_young_ref", gc_words, 9, consts=(u64(1),)))
 
 
 # ensure dir then run each test inside

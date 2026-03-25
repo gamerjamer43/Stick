@@ -27,6 +27,7 @@ typedef enum {
     PANIC_CALL_FAILED,
     PANIC_TYPE_MISMATCH,
     PANIC_INVALID_OPCODE,
+    PANIC_ARITH,
     PANIC_CODE_COUNT
 } Panic;
 

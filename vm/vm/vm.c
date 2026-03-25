@@ -27,6 +27,7 @@ const char *const MESSAGES[] = {
     "Call failed",
     "Type mismatch",
     "Invalid opcode",
+    "Arithmetic fault",
 };
 
 /**
@@ -338,6 +339,16 @@ bool vm_call(VM *vm, Func *fn, u32 base, u16 argc, u16 reg) {
             u16 new_base = caller->base + caller->regc;
             if (!ensure_regs(vm, new_base + fn->as.bc.regc)) return false;
 
+            // clear the callee register window, then copy incoming args into r0 -> r(argc-1)
+            for (u16 i = 0; i < fn->as.bc.regc; i++) {
+                vm->regs->types[new_base + i] = NUL;
+                vm->regs->payloads[new_base + i].u = 0;
+            }
+            for (u16 i = 0; i < argc; i++) {
+                vm->regs->types[new_base + i] = vm->regs->types[base + i];
+                vm->regs->payloads[new_base + i] = vm->regs->payloads[base + i];
+            }
+
             // push frame (safely ofc) and update fp
             Frame callee_frame = {
                 .jump = vm->ip,
@@ -625,6 +636,10 @@ bool vm_run(VM* vm) {
 
                 // refresh locals (abs + 1 is first arg)
                 u32 base = vm->current->base;
+                for (u16 i = 0; i < fn->as.bc.regc; i++) {
+                    vm->regs->types[base + i] = NUL;
+                    vm->regs->payloads[base + i].u = 0;
+                }
                 for (u16 i = 0; i < argc; i++) {
                     vm->regs->types[base + i] = vm->regs->types[abs + 1 + i];
                     vm->regs->payloads[base + i] = vm->regs->payloads[abs + 1 + i];
@@ -728,8 +743,25 @@ bool vm_run(VM* vm) {
                 if (val_reg > max) max = val_reg;
                 if (LIKELYFALSE(!ensure_regs(vm, max + 1))) return false;
 
-                HeapArray* arr;
-                DEREF_HEAP(vm, arr_reg, HEAP_TYPE_ARRAY, HeapArray, arr);
+                // if it's not an obj panic
+                if (vm->regs->types[arr_reg] != OBJ) {
+                    vm->panic_code = PANIC_TYPE_MISMATCH;
+                    return false;
+                }
+
+                // deref and check if its an array (or panic)
+                HeapRef arr_ref;
+                memcpy(&arr_ref, &vm->regs->payloads[arr_reg], sizeof(HeapRef));
+                if (LIKELYFALSE(heapref_type(arr_ref) != HEAP_TYPE_ARRAY)) {
+                    vm->panic_code = PANIC_TYPE_MISMATCH;
+                    return false;
+                }
+
+                HeapArray* arr = (HeapArray*)heap_deref(&vm->heap, arr_ref);
+                if (LIKELYFALSE(!arr)) {
+                    vm->panic_code = PANIC_OOB;
+                    return false;
+                }
 
                 // coerce index into a u64
                 u64 idx;
@@ -747,6 +779,7 @@ bool vm_run(VM* vm) {
                 // write element and bump length if appending
                 memcpy((u8*)arr->data + idx * arr->elem_size, &vm->regs->payloads[val_reg], arr->elem_size);
                 if (idx + 1 > arr->length) arr->length = (u32)(idx + 1);
+                heap_mark_dirty(&vm->heap, arr_ref);
                 break;
             }
 
@@ -866,8 +899,8 @@ bool vm_run(VM* vm) {
             case ADD:   BINOP_I64(+);  break;
             case SUB:   BINOP_I64(-);  break;
             case MUL:   BINOP_I64(*);  break;
-            case DIV:   BINOP_I64(/);  break;
-            case MOD:   BINOP_I64(%);  break;
+            case DIV:   BINOP_I64_SAFE_DIV(); break; // potentially remove and enforce div by 0 at compiler level
+            case MOD:   BINOP_I64_SAFE_MOD(); break;
             case AND:   BINOP_I64(&);  break;
             case OR:    BINOP_I64(|);  break;
             case XOR:   BINOP_I64(^);  break;
@@ -880,8 +913,8 @@ bool vm_run(VM* vm) {
             case ADD_U: BINOP_U64(+);  break;
             case SUB_U: BINOP_U64(-);  break;
             case MUL_U: BINOP_U64(*);  break;
-            case DIV_U: BINOP_U64(/);  break;
-            case MOD_U: BINOP_U64(%);  break;
+            case DIV_U: BINOP_U64_SAFE_DIV(); break; // potentially remove and enforce div by 0 at compiler level
+            case MOD_U: BINOP_U64_SAFE_MOD(); break;
             case AND_U: BINOP_U64(&);  break;
             case OR_U:  BINOP_U64(|);  break;
             case XOR_U: BINOP_U64(^);  break;

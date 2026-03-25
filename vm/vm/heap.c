@@ -25,7 +25,7 @@ static const u16 ELEM_SIZES[] = {
     [FLOAT]    = sizeof(float),
     [DOUBLE]   = sizeof(double),
     [OBJ]      = sizeof(HeapRef),
-    [CALLABLE] = sizeof(HeapRef),
+    [CALLABLE] = sizeof(Func*),
 };
 
 
@@ -36,15 +36,17 @@ bool bucket_init(Bucket* b, u8 type, u16 slot_size, u32 cap) {
     // allocate bucket slots (and provide 2 bits per slot)
     b->data = (u8*)calloc(cap, slot_size);
     b->marks = (u64*)calloc((cap + 31) / 32, sizeof(u64));
+    b->dirty = (u64*)calloc((cap + 63) / 64, sizeof(u64));
+    b->old = (u64*)calloc((cap + 63) / 64, sizeof(u64));
 
     // alloc check
-    if (!b->data || !b->marks) { 
+    if (!b->data || !b->marks || !b->dirty || !b->old) {
         bucket_free(b); 
         return false; 
     }
 
     b->used = 0;
-    b->old_boundary = 0;
+    b->free_head = BUCKET_FREE_NONE;
     b->type = type;
     b->capacity = cap;
     b->slot_size = slot_size;
@@ -58,13 +60,15 @@ void bucket_free(Bucket* b) {
 
     free(b->data);  
     free(b->marks); 
+    free(b->dirty);
+    free(b->old);
 
     // fully reset to prevent stale state bugs
     memset(b, 0, sizeof(*b));
 }
 
 bool bucket_grow(Bucket* b) {
-    if (!b || !b->data || !b->marks) return false;
+    if (!b || !b->data || !b->marks || !b->dirty || !b->old) return false;
 
     // double
     u32 old_cap = b->capacity;
@@ -81,32 +85,68 @@ bool bucket_grow(Bucket* b) {
     // make space for new marks
     u32 old_words = (old_cap + 31u) / 32u;
     u32 new_words = (new_cap + 31u) / 32u;
+    u32 old_bit_words = (old_cap + 63u) / 64u;
+    u32 new_bit_words = (new_cap + 63u) / 64u;
     u64* new_marks = (u64*)calloc((size_t)new_words, sizeof(u64));
-    if (!new_marks) {
+    u64* new_dirty = (u64*)calloc((size_t)new_bit_words, sizeof(u64));
+    u64* new_old = (u64*)calloc((size_t)new_bit_words, sizeof(u64));
+    if (!new_marks || !new_dirty || !new_old) {
         free(new_data);
+        free(new_marks);
+        free(new_dirty);
+        free(new_old);
         return false;
     }
 
     // copy old contents into the new buffers
     memcpy(new_data, b->data, (size_t)old_cap * (size_t)b->slot_size);
     memcpy(new_marks, b->marks, (size_t)old_words * sizeof(u64));
+    memcpy(new_dirty, b->dirty, (size_t)old_bit_words * sizeof(u64));
+    memcpy(new_old, b->old, (size_t)old_bit_words * sizeof(u64));
 
     // commit
     free(b->data);
     free(b->marks);
+    free(b->dirty);
+    free(b->old);
 
     b->data = new_data;
     b->marks = new_marks;
+    b->dirty = new_dirty;
+    b->old = new_old;
     b->capacity = new_cap;
     return true;
 }
 
 
-void* bucket_alloc(Bucket* b) {
+void* bucket_alloc(Bucket* b, u32* index) {
     if (!b || !b->data) return NULL;
-    if (b->used >= b->capacity && !bucket_grow(b)) return NULL;
 
-    return b->data + (b->used++ * b->slot_size);
+    if (b->free_head != BUCKET_FREE_NONE) {
+        for (u32 slot = b->free_head; slot < b->used; slot++) {
+            u32 w = slot / 32, off = (slot % 32) * 2;
+            if (((b->marks[w] >> off) & 0x3) != MARK_FREE) continue;
+
+            void* ptr = b->data + ((size_t)slot * b->slot_size);
+            memset(ptr, 0, b->slot_size);
+            b->marks[w] &= ~(0x3ULL << off);
+            bucket_set_dirty(b, slot, false);
+            bucket_set_old(b, slot, false);
+            if (index) *index = slot;
+            return ptr;
+        }
+
+        b->free_head = BUCKET_FREE_NONE;
+    }
+
+    if (b->used >= b->capacity && !bucket_grow(b)) return NULL;
+    if (index) *index = b->used;
+
+    void* ptr = b->data + (b->used * b->slot_size);
+    u32 slot = b->used++;
+    u32 w = slot / 32, off = (slot % 32) * 2;
+    b->marks[w] &= ~(0x3ULL << off);
+    return ptr;
 }
 
 void* bucket_get(Bucket* b, u32 idx) {
@@ -119,8 +159,43 @@ void* bucket_get(Bucket* b, u32 idx) {
 void bucket_clear_marks(Bucket* b) {
     if (!b || !b->marks) return;
 
-    // zero out every slot
-    memset(b->marks, 0, ((b->capacity + 31) / 32) * sizeof(u64));
+    for (u32 j = 0; j < b->used; j++) {
+        u32 w = j / 32, off = (j % 32) * 2;
+        if (((b->marks[w] >> off) & 0x3) == MARK_FREE) continue;
+        b->marks[w] &= ~(0x3ULL << off);
+    }
+}
+
+static void bucket_rebuild_free_list(Bucket* b) {
+    if (!b || !b->data || !b->marks) return;
+
+    while (b->used > 0) {
+        u32 slot = b->used - 1;
+        u32 w = slot / 32, off = (slot % 32) * 2;
+        if (((b->marks[w] >> off) & 0x3) != MARK_FREE) break;
+        b->used--;
+    }
+
+    b->free_head = BUCKET_FREE_NONE;
+    for (u32 j = 0; j < b->used; j++) {
+        u32 w = j / 32, off = (j % 32) * 2;
+        if (((b->marks[w] >> off) & 0x3) == MARK_FREE) {
+            b->free_head = j;
+            break;
+        }
+    }
+}
+
+static void bucket_free_slot(Bucket* b, u32 idx) {
+    if (!b || !b->data || !b->marks || idx >= b->used) return;
+
+    void* slot = b->data + ((size_t)idx * b->slot_size);
+    memset(slot, 0, b->slot_size);
+    bucket_set_dirty(b, idx, false);
+    bucket_set_old(b, idx, false);
+
+    u32 w = idx / 32, off = (idx % 32) * 2;
+    b->marks[w] = (b->marks[w] & ~(0x3ULL << off)) | ((u64)MARK_FREE << off);
 }
 
 
@@ -208,31 +283,27 @@ void heap_free(Heap* h) {
 HeapRef heap_alloc(Heap* h, HeapType type) {
     if (!h || type >= HEAP_TYPE_COUNT) return HEAP_REF_NULL;
 
-    // slot in appropriate type bucket, slot == used (last index in the bucket)
     Bucket* b = &h->buckets[type];
-    u32 slot = b->used;
+    u32 slot = 0;
 
     // guard 24-bit slot limit (HeapRef can only encode 0x00FFFFFF slots)
-    if (slot >= HEAP_MAX_SLOTS) return HEAP_REF_NULL;
+    if (b->used >= HEAP_MAX_SLOTS && b->free_head == BUCKET_FREE_NONE) return HEAP_REF_NULL;
 
     // if allocation somehow fails (i would assume it'd likely be due to calloc)
     // return a null ref (which will error the runtime)
-    if (!bucket_alloc(b)) return HEAP_REF_NULL;
+    if (!bucket_alloc(b, &slot)) return HEAP_REF_NULL;
 
     // slot and create the ref
     h->total_allocated += b->slot_size;
+    bucket_set_old(b, slot, false);
+    bucket_set_dirty(b, slot, false);
+    heap_set_color(h, heapref_make((u8)type, slot), MARK_WHITE);
     return heapref_make((u8)type, slot);
 }
 
 void* heap_deref(Heap* h, HeapRef ref) {
-    if (!h || ref == HEAP_REF_NULL) return NULL;
-
-    // validate type (will prolly remove w the bytecode verifier)
-    u8 type = heapref_type(ref);
-    if (type >= h->bucket_count) return NULL;
-
-    // get the value at that slot
-    return bucket_get(&h->buckets[type], heapref_slot(ref));
+    if (!heapref_is_valid(h, ref)) return NULL;
+    return bucket_get(&h->buckets[heapref_type(ref)], heapref_slot(ref));
 }
 
 // wrapper around heapref_type with nullchecking
@@ -362,7 +433,7 @@ void heap_trace(Heap* h) {
                 if (!arr) break;
 
                 // only trace if elements are heap references
-                if (arr->elem_type == OBJ || arr->elem_type == CALLABLE) {
+                if (arr->elem_type == OBJ) {
                     HeapRef* elems = (HeapRef*)arr->data;
                     for (u32 i = 0; i < arr->length; i++) {
                         heap_mark_gray(h, elems[i]);
@@ -383,7 +454,7 @@ void heap_trace(Heap* h) {
 
                 // trace any heap refs in fields
                 for (u16 i = 0; i < obj->field_count; i++) {
-                    if (obj->fields[i].type == OBJ || obj->fields[i].type == CALLABLE) {
+                    if (obj->fields[i].type == OBJ) {
                         HeapRef child;
                         memcpy(&child, obj->fields[i].val, sizeof(HeapRef));
                         heap_mark_gray(h, child);
@@ -398,6 +469,7 @@ void heap_trace(Heap* h) {
 
         // proven reachable and fully scanned
         heap_set_color(h, ref, MARK_BLACK);
+        heap_clear_dirty(h, ref);
     }
 }
 
@@ -413,14 +485,13 @@ void heap_sweep(Heap* h) {
         Bucket* b = &h->buckets[i];
         if (!b->data || !b->marks) continue;
 
-        u32 survivors = 0;
         for (u32 j = 0; j < b->used; j++) {
             u32 w = j / 32, off = (j % 32) * 2;
             u8 color = (b->marks[w] >> off) & 0x3;
+            if (color == MARK_FREE) continue;
 
             // living ppl get SKIPPED
             if (color == MARK_BLACK) {
-                survivors++;
                 continue;
             }
 
@@ -469,13 +540,11 @@ void heap_sweep(Heap* h) {
                 }
                 default: break;
             }
-        }
 
-        // entire bucket is DEAD. reclaim slot mem by resetting the bump pointer
-        if (survivors == 0 && b->used > 0) {
-            freed += b->used * b->slot_size;
-            b->used = 0;
+            freed += b->slot_size;
+            bucket_free_slot(b, j);
         }
+        bucket_rebuild_free_list(b);
     }
 
     // update alloc tracker
@@ -496,8 +565,14 @@ void heap_collect(Heap* h) {
     heap_sweep(h);
 
     // everything alive is now old gen
-    for (u32 i = 0; i < h->bucket_count; i++)
-        h->buckets[i].old_boundary = h->buckets[i].used;
+    for (u32 i = 0; i < h->bucket_count; i++) {
+        Bucket* b = &h->buckets[i];
+        for (u32 j = 0; j < b->used; j++) {
+            if (((b->marks[j / 32] >> ((j % 32) * 2)) & 0x3) == MARK_FREE) continue;
+            bucket_set_old(b, j, true);
+            bucket_set_dirty(b, j, false);
+        }
+    }
 
     h->minor_count = 0;
 }
@@ -513,13 +588,14 @@ void heap_sweep_young(Heap* h) {
         Bucket* b = &h->buckets[i];
         if (!b->data || !b->marks) continue;
 
-        u32 young_survivors = 0;
-        for (u32 j = b->old_boundary; j < b->used; j++) {
+        for (u32 j = 0; j < b->used; j++) {
+            if (bucket_is_old(b, j)) continue;
+
             u32 w = j / 32, off = (j % 32) * 2;
             u8 color = (b->marks[w] >> off) & 0x3;
+            if (color == MARK_FREE) continue;
 
             if (color == MARK_BLACK) {
-                young_survivors++;
                 continue;
             }
 
@@ -566,13 +642,11 @@ void heap_sweep_young(Heap* h) {
                 }
                 default: break;
             }
-        }
 
-        // if ALL young objects died, reclaim bump space back to old boundary
-        if (young_survivors == 0 && b->used > b->old_boundary) {
-            freed += (b->used - b->old_boundary) * b->slot_size;
-            b->used = b->old_boundary;
+            freed += b->slot_size;
+            bucket_free_slot(b, j);
         }
+        bucket_rebuild_free_list(b);
     }
 
     if (freed <= h->total_allocated) h->total_allocated -= freed;
@@ -589,7 +663,11 @@ void heap_promote_survivors(Heap* h) {
 
     for (u32 i = 0; i < h->bucket_count; i++) {
         Bucket* b = &h->buckets[i];
-        b->old_boundary = b->used;
+        for (u32 j = 0; j < b->used; j++) {
+            if (((b->marks[j / 32] >> ((j % 32) * 2)) & 0x3) == MARK_FREE) continue;
+            bucket_set_old(b, j, true);
+            bucket_set_dirty(b, j, false);
+        }
     }
 }
 

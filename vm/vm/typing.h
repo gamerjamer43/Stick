@@ -94,6 +94,18 @@ enum Type {
     vm->regs->payloads[dest].FIELD = vm->regs->payloads[lhs].FIELD OP vm->regs->payloads[rhs].FIELD; \
 } while (0)
 
+#define BINOP_TYPED_GUARDED(TAG, FIELD, OP, GUARD) do { \
+    u32 dest, lhs, rhs; \
+    if (!binop_indices(vm, ins, &dest, &lhs, &rhs)) return false; \
+    if (!require_type(vm, lhs, (TAG)) || !require_type(vm, rhs, (TAG))) return false; \
+    if (GUARD) { \
+        vm->panic_code = PANIC_ARITH; \
+        return false; \
+    } \
+    vm->regs->types[dest] = (TAG); \
+    vm->regs->payloads[dest].FIELD = vm->regs->payloads[lhs].FIELD OP vm->regs->payloads[rhs].FIELD; \
+} while (0)
+
 #define CMPOP_TYPED(TAG, FIELD, OP) do { \
     u32 dest, lhs, rhs; \
     if (!binop_indices(vm, ins, &dest, &lhs, &rhs)) return false; \
@@ -126,6 +138,17 @@ enum Type {
 #define BINOP_U64(OP) BINOP_TYPED(U64, u, OP)
 #define BINOP_F32(OP) BINOP_TYPED(FLOAT, f, OP)
 #define BINOP_F64(OP) BINOP_TYPED(DOUBLE, d, OP)
+
+#define BINOP_I64_SAFE_DIV() BINOP_TYPED_GUARDED(I64, i, /, \
+    vm->regs->payloads[rhs].i == 0 || \
+    (vm->regs->payloads[lhs].i == INT64_MIN && vm->regs->payloads[rhs].i == -1))
+
+#define BINOP_I64_SAFE_MOD() BINOP_TYPED_GUARDED(I64, i, %, \
+    vm->regs->payloads[rhs].i == 0 || \
+    (vm->regs->payloads[lhs].i == INT64_MIN && vm->regs->payloads[rhs].i == -1))
+
+#define BINOP_U64_SAFE_DIV() BINOP_TYPED_GUARDED(U64, u, /, vm->regs->payloads[rhs].u == 0)
+#define BINOP_U64_SAFE_MOD() BINOP_TYPED_GUARDED(U64, u, %, vm->regs->payloads[rhs].u == 0)
 
 #define CMPOP_I64(OP) CMPOP_TYPED(I64, i, OP)
 #define CMPOP_U64(OP) CMPOP_TYPED(U64, u, OP)

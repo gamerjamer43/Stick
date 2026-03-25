@@ -33,12 +33,12 @@ def main():
         
         if code:
             passed.append(test.name)
-            console.print(f"[green]✓[/] {test.name}")
+            console.print(f"[green]PASS[/] {test.name}")
             results.append((test.name, "[green]PASS[/]", str(result.returncode)))
 
         else:
             failed.append((test.name, result.returncode, result.stdout, result.stderr))
-            console.print(f"[red]✗[/] {test.name} (exit {result.returncode})")
+            console.print(f"[red]FAIL[/] {test.name} (exit {result.returncode})")
             results.append((test.name, "[red]FAIL[/]", str(result.returncode)))
 
     # build nice table
