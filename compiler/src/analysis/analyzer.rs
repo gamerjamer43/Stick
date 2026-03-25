@@ -1,5 +1,5 @@
-use std::{collections::HashMap, time::Instant};
 use std::ops::Range;
+use std::{collections::HashMap, time::Instant};
 
 use crate::{
     error::{Diagnostic, SemanticError, SemanticError::*, SyntaxError, SyntaxError::*},
@@ -860,7 +860,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
     pub fn analyze(&mut self) {
         let start: Instant = Instant::now();
-        
+
         while let Some(node) = self.cur().cloned() {
             match node {
                 Stmt::Expr(expr) => {
@@ -871,7 +871,6 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 // Stmt::Continue => self.check_continue(&node),
                 // Stmt::FuncDecl { .. } => self.check_func(&node),
                 // Stmt::Error => self.check_stmt_error(&node),
-                
                 Stmt::VarDecl { .. } => self.check_decl(&node),
 
                 _ => {}
@@ -882,7 +881,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
         println!(
             "Analyzed {} symbols in {}s.",
-            self.resolved.len(), 
+            self.resolved.len(),
             start.elapsed().as_secs_f64()
         );
 
@@ -890,7 +889,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             for error in &self.errors {
                 eprintln!("{error}");
             }
-            println!("\n(!) {} semantic errors found.", self.errors.len());
+            eprintln!("\n(!) {} semantic errors found.", self.errors.len());
         }
     }
 }

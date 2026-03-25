@@ -1,5 +1,6 @@
 use super::{ParseError, SemanticError, SyntaxError};
-use ariadne::{Color, Label, Report, ReportKind, Source};
+use crate::error::errors::LexError;
+use ariadne::{Color, Config, Label, LabelAttach, Report, ReportKind, Source};
 use std::{
     fmt::{Display, Formatter, Result},
     fs::File,
@@ -25,12 +26,53 @@ pub struct Diagnostic<'a, 'src> {
 
 // hacky way to avoid defining names for every type
 impl<'src> SyntaxError<'src> {
-    pub fn name(&self) -> &str {
+    pub fn title(&self) -> &str {
         match self {
             SyntaxError::Lex(e) => e.as_ref(),
             SyntaxError::Parse(e) => e.as_ref(),
             SyntaxError::Semantic(e) => e.as_ref(),
             SyntaxError::Unknown => "Unknown",
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            SyntaxError::Lex(LexError::UnterminatedString(_)) => {
+                "string literal starts here but never closes".into()
+            }
+            SyntaxError::Lex(LexError::UnterminatedChar(_)) => {
+                "character literal starts here but never closes".into()
+            }
+            SyntaxError::Lex(LexError::UnknownToken(tok)) => format!("unexpected token `{tok}`"),
+            SyntaxError::Parse(ParseError::MissingExpected(msg)) => {
+                if msg.starts_with("expected expression") {
+                    "expected an expression here".into()
+                } else {
+                    "required syntax is missing here".into()
+                }
+            }
+            SyntaxError::Parse(ParseError::ConstDisallowed(_)) => {
+                "`const` is not allowed here".into()
+            }
+            SyntaxError::Semantic(SemanticError::TypeInference(_)) => {
+                "type cannot be inferred from this declaration".into()
+            }
+            SyntaxError::Semantic(SemanticError::TypeMismatch(_)) => {
+                "this value does not match the target type".into()
+            }
+            SyntaxError::Semantic(SemanticError::UnknownIdentifier(name)) => {
+                format!("`{name}` is not declared in this scope")
+            }
+            SyntaxError::Semantic(SemanticError::ImmutableBinding(name)) => {
+                format!("`{name}` is immutable")
+            }
+            SyntaxError::Semantic(SemanticError::InvalidOperation(_)) => {
+                "this operation is not valid for the selected value(s)".into()
+            }
+            SyntaxError::Semantic(SemanticError::Overflow(_)) => {
+                "this constant does not fit in the target type".into()
+            }
+            SyntaxError::Unknown => "problematic code is here".into(),
         }
     }
 
@@ -91,7 +133,7 @@ impl<'src> SyntaxError<'src> {
                     "reduce the constant value, widen the destination type, or make the value explicit in a larger type first"
                 }
             },
-            
+
             SyntaxError::Unknown => "Only god can save you (or reading the docs lmao.)",
         }
     }
@@ -102,16 +144,22 @@ impl<'a, 'src> Display for Diagnostic<'a, 'src> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let mut buf: Vec<u8> = Vec::new();
 
-        // main report with a short, human-friendly header
-        let name: &str = self.err.name();
+        let config = Config::default()
+            .with_label_attach(LabelAttach::Start);
+
         Report::build(
-            ReportKind::Custom(name, Color::Red),
+            ReportKind::Custom(self.err.title(), Color::Red),
             self.path,
             self.span.start,
         )
+        .with_config(config)
         .with_message(&self.err)
         // points to what's fucked up
-        .with_label(Label::new((self.path, self.span.clone())).with_message("error here"))
+        .with_label(
+            Label::new((self.path, self.span.clone()))
+                .with_color(Color::Red)
+                .with_message(self.err.label()),
+        )
         // lexer help (doing different display in the parser, as i will need notes)
         .with_help(self.err.help()) // short hint
         .finish()
@@ -128,7 +176,11 @@ pub fn dump(errors: &[Diagnostic<'_, '_>], path: &str) -> io::Result<()> {
     let file: File = File::create(path)?;
     let mut writer: BufWriter<File> = BufWriter::new(file);
 
-    for diag in errors {
+    for (idx, diag) in errors.iter().enumerate() {
+        if idx > 0 {
+            writeln!(writer)?;
+        }
+
         // strip ANSI escape sequences
         let stripped: Vec<u8> = strip(diag.to_string().as_bytes());
 

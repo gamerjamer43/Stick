@@ -31,7 +31,7 @@ fn log_errors(errors: &Vec<Diagnostic<'_, '_>>, flags: Vec<bool>) {
         dump(errors, "lastrun.log").unwrap_or_else(|_| eprintln!("Failed to dump errors."));
     }
 
-    println!("\n(!) {} errors found.", errors.len());
+    eprintln!("\n(!) {} errors found.", errors.len());
 }
 
 fn main() {

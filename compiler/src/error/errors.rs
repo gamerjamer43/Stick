@@ -68,9 +68,9 @@ impl Display for LexError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         use LexError::*;
         match self {
-            UnterminatedString(s) => write!(f, "{s} is missing a closing \""),
-            UnterminatedChar(s) => write!(f, "{s} is missing a closing '"),
-            UnknownToken(s) => write!(f, "the hanging symbol '{s}' is not in the language spec."),
+            UnterminatedString(_) => write!(f, "string literal is missing its closing quote"),
+            UnterminatedChar(_) => write!(f, "character literal is missing its closing quote"),
+            UnknownToken(s) => write!(f, "token `{s}` is not valid in this language"),
         }
     }
 }
@@ -91,10 +91,10 @@ impl Display for SemanticError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         use SemanticError::*;
         match self {
-            TypeInference(s) => write!(f, "failed to infer type for {s}"),
-            UnknownIdentifier(s) => write!(f, "identifier hasnt been declared yet {s}"),
-            ImmutableBinding(s) => write!(f, "cannot mutate immutable binding {s}"),
-            Overflow(s) => write!(f, "potentially implement a bounds check! {s}"),
+            TypeInference(s) => write!(f, "{s}"),
+            UnknownIdentifier(s) => write!(f, "unknown identifier `{s}`"),
+            ImmutableBinding(s) => write!(f, "cannot assign to immutable binding `{s}`"),
+            Overflow(s) => write!(f, "{s}"),
             TypeMismatch(s) | InvalidOperation(s) => write!(f, "{s}"),
         }
     }
