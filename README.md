@@ -1,6 +1,6 @@
 <h1 align="center"> Stick 🌿 </h1>
 
-<p align="center"><img width="256" height="256" alt="Stick Logo" src="https://github.com/user-attachments/assets/27d2184b-8638-4f0f-a2ad-48379adcad30" /></p>
+<p align="center"><img width="256" height="256" alt="Stick Logo" src="https://github.com/user-attachments/assets/19ab6a4f-cce3-4854-824f-3ff030879a9f" /></p>
 <p align="center">
     <img alt="Version" src="https://img.shields.io/badge/version-0.0.20%20indev-blue.svg" />
     <img alt="C-Edition" src="https://img.shields.io/badge/C-C99%2FC11-grey.svg" />
