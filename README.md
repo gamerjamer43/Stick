@@ -30,18 +30,21 @@
 
 ## Specs
 
-- **32 bit instruction width** — `[op:8][a:8][b:8][c:8]`, giving us room for plenty of information dense bytecode (a million instructions is only 4mb itself). Double words are only 64 bits, making this relatively compact.
-- **Windowed register-based architecture** — The entire VM runs on 65536 global registers. Each frame carves out its own slice of the register file using a base offset, and on return everything in that scope is cleared and the pointer is pulled back. Simple.
+- **32 bit instruction width** — `[op:8][a:8][b:8][c:8]`, giving us room for plenty of information dense bytecode (a million instructions is only 4mb itself). Double words are only 64 bits, making this relatively compact while still being extremely strong.
+- **Windowed register-based architecture** — The entire VM runs on 65536 global registers. Each frame carves out its own slice of the register file using a base offset, and on return everything in that scope is cleared and the stack pointer is moved up. Simple.
 - **Strong static typing, at both compile and runtime** — The goal is to make this as absolutely explicit as possible. Logical operations can only be done on booleans, each type has RTTI (full metadata WIP, but for right now at least the type)
-- **Constant & global pools** — Constants are immutable and baked in at compile time. Globals are mutable and persist across the entire runtime. No need to construct values at runtime, they just get loaded in.
+- **Immutable by default model:** If something isn't mutable, it will immediately go to the constant pool. This allows registers to logically be used for modfiable data, whereas if something denoted const explicitly mo
+- **Constant & global pools** — Constants are baked into the bytecode at compile time. Globals are mutable and persist across the entire runtime. No need to construct values at runtime, they just get loaded into respective pools. Looking into statics as well (memory location does not change. i.e. an array denoted static will never grow or move, and the reference will survive the entire runtime).
 - **Frame Based Model** — In the way the actual stack works, space is reserved for the entry frame (aka main) on run. From there, frames are pushed and popped until we reach the bottom layers end, in which case it will expect a halt (if none is found it will panic with Code 1, though I could make it automatically insert). Registers are local to the VM with the frame reserving a base value to start placing registers at on creation.
-- **Values fixed 9 byte width, no packing** — I toyed around with this in 5 different ways and found a solution I really like. Constant/Global values are stored as u8 byte arrays pretty much, and all the others live in a properly aligned registers "file". Cuz I'm crazy, I will likely still look into alternative options, but this leaves us at 9 bytes fixed no matter what, "wasting" only one for the type. If I were to NAN box I would not be able to do typed canonical widths, so this allows extension to basically just be a noop. The layout is:
 - **C99 Base** — I'm potentially looking into switching to gnu99, but plain ISO C99 is working just fine, and I don't necessarily need typeof because types are stored separately and punned.
+- **Values fixed 9 byte width, no packing** — I toyed around with this in 5 different ways and found a solution I really like. Constant/Global values are stored as u8 byte arrays pretty much, and all the others live in a properly aligned registers "file". Cuz I'm crazy, I will likely still look into alternative options, but this leaves us at 9 bytes fixed no matter what, "wasting" only one for the type. If I were to NAN box I would not be able to do typed canonical widths, so this allows extension to basically just be a noop. The layout is:
 ```c
 // constants, globals, and values that otherwise need to be serialized. if we do not need to memcpy more than once in a hot loop it only costs abt 2 cycles + disk/ram overhead
+// registers are the second thing loaded (after an already compiler aligned VM) reducing the risk of values throwing off the width
 typedef struct {
-    u8 payload[8];
+    u8 payload[8]; // might just switch to TypedValue and pun by bit value to avoid memcpy alltogether
     u8 type;
+    u8 padding[7]; // explicit padding
 } Value;
 
 // any value that lives in a register will be in a union so type punning can happen based on the tag
@@ -114,10 +117,12 @@ A lot of moving parts come together to make this so fast. A combination of multi
 │  istream[]     - instruction array                  │
 │  consts[]      - constant pool (immutable)          │
 │  globals[]     - global variables (mutable)         │
-│  regs          - flat register file (types + vals)  │
-│  frames[]      - call stack                         │
+|  func**        - pointer to every func pointer      |
+│  regs[]        - the stack (flat registers, typed)  │
+│  frames*       - points to the top frame            │
 │  ip            - instruction pointer                │
 │  panic_code    - error state                        │
+|  Heap          - an owned instance of the heap      |
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -266,7 +271,7 @@ I hope this creates for an interesting (and original) concept that gives you the
 **Frontend:**
 - [x] Lexer
 - [X] Parser (90% done)
-- [/] Semantic analysis
+- [X] [40%] Semantic analysis
 - [ ] Language Server Protocol
 - [ ] TextMate & LSP based highlighting
 - [ ] Comptime interpreter (and simple REPL)
@@ -276,8 +281,8 @@ I hope this creates for an interesting (and original) concept that gives you the
 
 **Backend:**
 - [ ] Bytecode Verifier
-- [/] Bytecode VM (currently @ 105 test cases)
-- [/] Native FFI
+- [X] [70%] Bytecode VM (currently @ 105 test cases)
+- [X] [50%] C Foreign Function Interface (call C functions thru the language)
 - [ ] Standard library
 - [ ] Debug info / source maps
 - [ ] C-compatible ABI
@@ -330,5 +335,5 @@ I'm working on this as a personal project, so if you really want me to start dro
 
 <div align="center">
     <p style="margin:0">Made with 🌿 by <a href="https://github.com/gamerjamer43">gamerjamer43</a></p>
-    <sub>Execute responsibly. Never run untrusted code!!! Due to C FFI, this language has the same power as any other language to steal credentials, compromise your device, or install files!</sub>
+    <sub>Execute responsibly. Never run untrusted code! Due to C FFI, this language has the same power as any other language to steal credentials, compromise your device, or install files!</sub>
 </div>

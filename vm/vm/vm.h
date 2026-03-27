@@ -176,7 +176,6 @@ typedef struct VM {
 
     // touched by gc only, so coldest
     Heap heap; // owned heap struct
-
 } VM;
 
 
