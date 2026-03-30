@@ -115,7 +115,7 @@ fn main() {
     if flags[0] {
         println!(
             "\nRan analyzer and resolved {} symbols.",
-            analyzer.resolved.len()
+            analyzer.symbol_count()
         );
         println!("List of inferred or resolved types: {:#?}", analyzer.types);
     }

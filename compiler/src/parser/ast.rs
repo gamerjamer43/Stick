@@ -45,6 +45,10 @@ impl<'src> Literal<'src> {
     }
 }
 
+fn join_spans(lhs: Range<usize>, rhs: Range<usize>) -> Range<usize> {
+    lhs.start.min(rhs.start)..lhs.end.max(rhs.end)
+}
+
 /// all builtin types
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type<'src> {
@@ -134,6 +138,16 @@ pub enum LeftSide<'src> {
     },
 }
 
+impl<'src> LeftSide<'src> {
+    pub fn span(&self) -> Range<usize> {
+        match self {
+            LeftSide::Var(ident) => ident.span(),
+            LeftSide::Field { obj, name } => join_spans(obj.span(), name.span()),
+            LeftSide::Subscript { obj, sub } => join_spans(obj.span(), sub.span()),
+        }
+    }
+}
+
 /// array accesses should only be indexing or slicing
 #[derive(Debug, Clone, PartialEq)]
 pub enum Subscript<'src> {
@@ -142,6 +156,20 @@ pub enum Subscript<'src> {
         start: Option<Box<Expr<'src>>>,
         end: Option<Box<Expr<'src>>>,
     },
+}
+
+impl<'src> Subscript<'src> {
+    pub fn span(&self) -> Range<usize> {
+        match self {
+            Subscript::Index(expr) => expr.span(),
+            Subscript::Range { start, end } => match (start, end) {
+                (Some(start), Some(end)) => join_spans(start.span(), end.span()),
+                (Some(start), None) => start.span(),
+                (None, Some(end)) => end.span(),
+                (None, None) => 0..0,
+            },
+        }
+    }
 }
 
 /// both types of operation that can be infixed
@@ -180,40 +208,6 @@ pub enum BinOp {
     BitXor,
     Shl,
     Shr,
-}
-
-// binop helpers (solves a lot of bad patterns)
-impl BinOp {
-    #[inline]
-    pub fn is_arithmetic(self) -> bool {
-        matches!(
-            self,
-            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Mod | Self::Power
-        )
-    }
-
-    #[inline]
-    pub fn is_bitwise(self) -> bool {
-        matches!(
-            self,
-            Self::BitAnd | Self::BitOr | Self::BitXor | Self::Shl | Self::Shr
-        )
-    }
-
-    #[inline]
-    pub fn is_comparison_or_logical(self) -> bool {
-        matches!(
-            self,
-            Self::Eq
-                | Self::NotEq
-                | Self::Less
-                | Self::LessEq
-                | Self::Greater
-                | Self::GreaterEq
-                | Self::And
-                | Self::Or
-        )
-    }
 }
 
 /// and the 3 unary operators
@@ -356,6 +350,54 @@ pub enum Expr<'src> {
     Unknown,
 }
 
+impl<'src> Expr<'src> {
+    pub fn span(&self) -> Range<usize> {
+        match self {
+            Expr::Ident(ident) => ident.span(),
+            Expr::Literal(literal) => literal.span(),
+            Expr::Assign { lhs, rhs, .. } => join_spans(lhs.span(), rhs.span()),
+            Expr::Unary { expr, .. } => expr.span(),
+            Expr::Binary { lhs, rhs, .. } => join_spans(lhs.span(), rhs.span()),
+            Expr::Call { func, args } => args
+                .last()
+                .map(|arg| join_spans(func.span(), arg.span()))
+                .unwrap_or_else(|| func.span()),
+            Expr::Field { obj, name } => join_spans(obj.span(), name.span()),
+            Expr::Method {
+                receiver,
+                method,
+                args,
+            } => args
+                .last()
+                .map(|arg| join_spans(receiver.span(), arg.span()))
+                .unwrap_or_else(|| join_spans(receiver.span(), method.span())),
+            Expr::Index { obj, sub } => join_spans(obj.span(), sub.span()),
+            Expr::Block { stmts, tail } => tail
+                .as_ref()
+                .map(|expr| expr.span())
+                .or_else(|| stmts.last().map(Stmt::span))
+                .unwrap_or(0..0),
+            Expr::If { cond, then, else_ } => else_
+                .as_ref()
+                .map(|else_expr| join_spans(cond.span(), else_expr.span()))
+                .unwrap_or_else(|| join_spans(cond.span(), then.span())),
+            Expr::While { cond, body } => join_spans(cond.span(), body.span()),
+            Expr::Match { item, branches } => branches
+                .last()
+                .map(|branch| join_spans(item.span(), branch.body.span()))
+                .unwrap_or_else(|| item.span()),
+            Expr::For { iter, body, .. } => join_spans(iter.span(), body.span()),
+            Expr::Range { start, end } => match (start, end) {
+                (Some(start), Some(end)) => join_spans(start.span(), end.span()),
+                (Some(start), None) => start.span(),
+                (None, Some(end)) => end.span(),
+                (None, None) => 0..0,
+            },
+            Expr::Unknown => 0..0,
+        }
+    }
+}
+
 /// helper for the specific thing matched on a pattern match
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern<'src> {
@@ -432,4 +474,22 @@ pub enum Stmt<'src> {
 
     // improperly parsed statements
     Error,
+}
+
+impl<'src> Stmt<'src> {
+    pub fn span(&self) -> Range<usize> {
+        match self {
+            Stmt::Expr(expr) => expr.span(),
+            Stmt::Return(Some(expr)) => expr.span(),
+            Stmt::VarDecl { name, init, .. } => init
+                .as_ref()
+                .map(|expr| join_spans(name.span(), expr.span()))
+                .unwrap_or_else(|| name.span()),
+            Stmt::FuncDecl { name, body, .. } => body
+                .as_ref()
+                .map(|expr| join_spans(name.span(), expr.span()))
+                .unwrap_or_else(|| name.span()),
+            Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Error => 0..0,
+        }
+    }
 }
