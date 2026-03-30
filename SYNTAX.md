@@ -2,12 +2,30 @@
 
 ## Language Features:
 
+### $\frac{1}{2}$. small things before getting into it
+```
+// C style comments feel familiar. single line comment
+
+/* 
+ * multi line comment
+ * or docs which the LSP will bring up
+ */
+
+// another note: there is two different access symbols
+:: = path access (used for Module::traversal and Static::methods())
+. = instance access (used for instance.field and instance.method())
+```
+
 ### 1. import vs include
 
 ```text
+// import denotes an already compiled module that can be used at runtime
+// similar to crates in rust and packages in python
 import module
 from module import x
 
+// include denotes a module needs to be pulled in for compilation along with the source file
+// similar to C's include or rust's mod
 include "file_to_be_compiled.sk"
 
 // trying to decide how i should support files outside the project dir
@@ -53,12 +71,19 @@ let mut table: {u8, u8} = {
     1: 2,
     3: 4
 }
+
+// lastly, unit type. this type carries exactly one value, which is ().
+// this shows something IS presented, but no value is carried with it.
+// i.e. a successful print statement would return this. this is a feature of rust
+let _ = ()
+
+// TODO: null vs None semantics and if i should even have null
 ```
 
 ### 3. storage specifiers
 
 ```text
-// values are implicitly constant. to make a value mutable, tag it mut (this language is heavily rust flavored)
+// by default: values are implicitly constant. to make a value mutable, tag it mut (this language is heavily rust flavored)
 let mut seconds: u8 = 0
 seconds = 100
 
@@ -178,7 +203,12 @@ struct Person {
     alive: bool = true
 
     fn new(self, name: str, phone: u64) -> Self {
-        return
+        return Self { name, phone }
+    }
+
+    // method overloading is also allowed
+    fn new(self, name: str, phone: u64, alive: bool) -> Self {
+
     }
 }
 
@@ -198,6 +228,8 @@ struct Person {
 // pub field5: i32 // has the default getter and setter
 //
 // trying to also decide if self should be implicit. if i provide safe pointers it shouldn't
+// 
+// lastly, trying to decide if operators should be overloadable or if you should have to provide a method instead
 ```
 
 ### 8. traits
@@ -311,6 +343,62 @@ let float: f32 = double // ERROR! this would silently lose precision
 // 3. float to integer
 let integer: i32 = double // ERROR! would truncate to 2 silently otherwise
 ```
+
+### 12. Algebraic Data Types
+note for those who don't know: algebraic data types are really easy. watch [rats159's video](https://www.youtube.com/watch?v=Mvam_zaOlu4) on type systems
+
+1. sum type: the number of inners SUMMED is the total amount of type probabilities we have. example: enum
+```text
+// total possibilities: 3, how many inners are there? 3... makes sense
+enum Color {
+    RED,
+    GREEN,
+    BLUE,
+}
+
+// enums can be used as standard types
+fn color_text(c: Color, t: str) {
+    match c {
+        Color::RED -> writeln("red: {text}")
+        Color::GREEN -> writeln("green: {text}")
+        Color::BLUE -> writeln("blue: {text}")
+    }
+}
+
+color_text(Color::RED, "hi")
+```
+
+2. product type: the amount of possibilities a PRODUCT can be is how many distinct combinations that tuple can hold. (will make sense bear with me)
+```text
+enum Color {
+    RED,
+    GREEN,
+    BLUE,
+}
+
+enum Count {
+    ONE,
+    TWO,
+    THREE
+}
+
+// 9 distinct possibilities. three colors, times three counts
+// (red, one), (red, two), (red, three), (green, one)... (blue, three) ya see what im getting at
+let colored: (Color, Count) = (RED, ONE)
+```
+
+3. algebraic data types: no support for Generalized ADTS (which are a lot more to explain so really, watch that video) but enums can carry data
+```
+// example being the native option type
+enum Option[T] {
+    Some(T),
+    None
+}
+
+// that some can carry data inside of it
+let some: str = Option::Some("hi").unwrap()
+```
+
 
 ### Planned features idk how to implement
 

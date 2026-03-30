@@ -210,6 +210,20 @@ The body contains a list of 32 bit instructions (count matches the listed instru
 └────────────────────────────────────┘
 ```
 
+## Heap and GC
+The model for the Heap and GC was a very intrinsic and intentional one. The heap is a 
+- bucketed, 
+- bump allocator 
+- with the addition of a freelist. 
+
+This makes the cost of reserving a new bucket amortize over time, as reservation takes almost nothing (upwards of 50 cycles, but this averages out remember), and a bump takes a grand total of ~5 cycles. When anything is freed from a bucket, the allocator maintains a freelist and will reuse the slot instead of just killing the bucket, which makes this less bump more slab + freelist allocation, but because of how the GC works this lies closer to a bump allocator.
+
+A major GC sweep is triggered once you go above the threshold (or every 16 GC cycles otherwise) and minor GC sweeps are run incrementally. The model the GC uses is:
+- Tri-Color: objects start in a "black" state (not proven whether the object needs to be freed) and the GC runs over these, and either keeps them black, or sorts them to "gray" (proven reachable, pointers unscanned) or "white" (proven it needs to be freed). An exclusive black or white bit would save 50% of the space (as i maintain a trit, 00 = black, 01 = gray, 10 = white) but gray allows for more versatile collection due to the fact that while an object might be determinately black, its pointers might still be in use which could cause a Use-After-Free
+- Generational: heap allocated objects are allocated by generation (how early in the program other things around it were allocated). when a generation is fully dead, the bucket will be cleared and able to be reused
+- Dirty Tracking: dirty bits are used to track references from old to young generations, which gives the GC another potentially faster route of freeing full buckets. During a minor GC, only the dirty objects are scanned as potential roots instead of scanning the full old generation
+- Adaptive Threshold: this is a hallmark of a normal GC but it deserved a mention. if the threshold is exceeded, it will double.
+
 ## Utils
 This repo also comes with a couple utilities I used during the build process. This list includes:
 - test.py: the test generator (shitty name ik) that comes with 78 cases, ranging from normal functionality to a few edge cases, AFAIK mostly encompassing.
@@ -220,14 +234,17 @@ This repo also comes with a couple utilities I used during the build process. Th
 **MAIN DESIGN GOALS:**
 - Open paradigm, allowing you to work:
     - Functionally using no objects/structs and supporting features like:
-        - Tail call
-        - [Algebraic Data Types](https://en.wikipedia.org/wiki/Algebraic_data_type)(ADT)
-        - Other thoughts later it's 3 am...
+        - Tail call [DONE]
+        - Immutablility by default [IN PROGRESS]
+        - [Algebraic Data Types](https://en.wikipedia.org/wiki/Algebraic_data_type) (ADT) [IN PROGRESS]
+        - First-class functions
+        - Builder patterns (references to self should be different than moving self)
+
     - Imperatively:
         - Packed structs
         - Pointers and referencing (though will have a safety element on top, likely compile AND runtime... so I prolly won't optimize off rip)
         - Again read the above. Brain slurry. I got class at 9 am and it's 3:43 🗿
-    - 
+    
 - Rust power (heavily expands on some features from C/C++ with added mem safety)
 - Python simplicity (using OOP/imperative paradigms)
 - Go learning curve (super flat)
