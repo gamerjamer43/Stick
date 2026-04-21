@@ -218,6 +218,17 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         matches!(typ, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64)
     }
 
+    /// check if two types can be compared for equality
+    fn are_comparable_for_equality(lhs: &Type<'src>, rhs: &Type<'src>) -> bool {
+        (Self::is_numeric(lhs) && Self::is_numeric(rhs))
+            || (lhs == rhs)
+    }
+
+    /// check if two types can be compared for ordering
+    fn are_comparable_for_ordering(lhs: &Type<'src>, rhs: &Type<'src>) -> bool {
+        Self::is_numeric(lhs) && Self::is_numeric(rhs)
+    }
+
     fn const_from_literal(&self, literal: &Literal<'src>) -> Option<ConstValue> {
         match literal {
             Literal::Int(value, _) => Some(ConstValue::Int(value.replace('_', "").parse().ok()?)),
@@ -519,14 +530,13 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             And | Or if lhs_type == Type::Bool && rhs_type == Type::Bool => Ok(Type::Bool),
             And | Or => Err(InvalidOperation("logical operators require bool operands")),
 
-            Eq | NotEq if lhs_type == rhs_type => Ok(Type::Bool),
-            Eq | NotEq if self.common_numeric_type(&lhs_type, &rhs_type).is_some() => Ok(Type::Bool),
+            Eq | NotEq if Self::are_comparable_for_equality(&lhs_type, &rhs_type) => Ok(Type::Bool),
             Eq | NotEq => Err(InvalidOperation(
                 "equality operands must have the same or compatible numeric types",
             )),
 
             Less | LessEq | Greater | GreaterEq
-                if self.common_numeric_type(&lhs_type, &rhs_type).is_some() =>
+                if Self::are_comparable_for_ordering(&lhs_type, &rhs_type) =>
             {
                 Ok(Type::Bool)
             }
