@@ -1,5 +1,7 @@
 // statmements and blocks
 
+let five: u8 = 5
+
 if five == 5 {
     writeln("well fucking obviously {five} == 5")
 }
@@ -37,6 +39,14 @@ fn name2(arg: _, arg2: ()) -> () {
 
 fn name3() -> () {
     writeln("hi")
+}
+
+fn names(lst: ...str) -> () {
+    write("hello to: ")
+    for name in names {
+        write("{name}")
+    }
+    writeln()
 }
 
 match case {

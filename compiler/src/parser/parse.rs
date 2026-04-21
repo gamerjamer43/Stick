@@ -755,6 +755,11 @@ impl<'src, 't> Parser<'src, 't> {
 
     fn parse_type(&mut self) -> Type<'src> {
         // TODO: add support for array and generic types
+        let is_varargs = self.matches(&Token::Elipses);
+        if is_varargs {
+            self.advance();
+        }
+
         let typ: Type<'src> = match self.expect_msg(
             |t| matches!(t, &Token::Identifier(_) | &Token::Unit | &Token::Underscore),
             "invalid or missing type",
@@ -788,8 +793,12 @@ impl<'src, 't> Parser<'src, 't> {
             }
         };
 
-        // durrrrr make type the tail obviously
-        typ
+        // wrap as VarArgs if we saw an elipsis at the end
+        if is_varargs {
+            Type::VarArgs(Box::new(typ))
+        } else {
+            typ
+        }
     }
 
     fn parse_block_expr(&mut self) -> Expr<'src> {

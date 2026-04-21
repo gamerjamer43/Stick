@@ -99,6 +99,9 @@ pub enum Type<'src> {
         ret: Box<Type<'src>>,
     },
 
+    /// variadic function parameter (...T)
+    VarArgs(Box<Type<'src>>),
+
     // if i add a borrow system
     // `&T` / `&mut T`
     // Ref {
