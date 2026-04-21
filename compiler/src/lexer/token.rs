@@ -128,6 +128,7 @@ pub enum Token<'src> {
     #[token("match")]    Match,
     
     // module system
+    #[token("include")]  Include,
     #[token("import")]   Import,
     #[token("from")]     From,
 

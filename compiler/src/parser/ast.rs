@@ -475,6 +475,11 @@ pub enum Stmt<'src> {
         body: Option<Expr<'src>>,
     },
 
+    // include a source file for compilation
+    Include {
+        path: &'src str,
+    },
+
     // improperly parsed statements
     Error,
 }
@@ -492,6 +497,7 @@ impl<'src> Stmt<'src> {
                 .as_ref()
                 .map(|expr| join_spans(name.span(), expr.span()))
                 .unwrap_or_else(|| name.span()),
+            Stmt::Include { .. } => 0..0,
             Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Error => 0..0,
         }
     }

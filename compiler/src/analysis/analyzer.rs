@@ -884,7 +884,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
             // unchecked for right now (break and continue should only be used in loops)
             // error shouldn't exist at this stage
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Error => {}
+            Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Error | Stmt::Include { .. } => {}
         }
     }
 

@@ -584,6 +584,23 @@ impl<'src, 't> Parser<'src, 't> {
         })
     }
 
+    fn parse_include(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
+        self.advance();
+        
+        // expect a string literal file path
+        match self.cur() {
+            Some(Token::LitString(path)) => {
+                let path = *path;
+                self.advance();
+                Ok(Stmt::Include { path })
+            }
+            
+            _ => Err(Parse(MissingExpected(
+                "include statement requires a string literal path (e.g., include \"path/to/file.stk\")",
+            ))),
+        }
+    }
+
     fn parse_for_expr(&mut self) -> Expr<'src> {
         let pattern: Pattern<'_> = self.parse_pattern();
 
@@ -835,6 +852,11 @@ impl<'src, 't> Parser<'src, 't> {
                 },
 
                 Token::Fn => match self.parse_func() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
+                Token::Include => match self.parse_include() {
                     Ok(stmt) => stmts.push(stmt),
                     Err(e) => self.error(e),
                 },
@@ -1095,6 +1117,12 @@ impl<'src, 't> Parser<'src, 't> {
 
                 // same dispatch for parse func
                 Token::Fn => match self.parse_func() {
+                    Ok(stmt) => nodes.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
+                // include source files
+                Token::Include => match self.parse_include() {
                     Ok(stmt) => nodes.push(stmt),
                     Err(e) => self.error(e),
                 },
