@@ -16,13 +16,13 @@ else {
 
 // standard for loops r rust style
 for i in 0..5 {
-
+    writeln(i)
 }
 
 // enhanced for loops work too!
-for i in expr {
-
-}
+// for i in expr {
+//     
+// }
 
 while five == 5 {
     five++

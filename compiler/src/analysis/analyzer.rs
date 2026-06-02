@@ -2,8 +2,16 @@ use std::ops::Range;
 use std::{collections::HashMap, time::Instant};
 
 use crate::{
-    error::{Diagnostic, SemanticError, SemanticError::*, SyntaxError, SyntaxError::*},
-    parser::ast::{AssignOp, BinOp, Expr, Ident, LeftSide, Literal, Stmt, Type, UnaryOp},
+    error::{
+        Diagnostic, 
+        SemanticError, SemanticError::*, 
+        SyntaxError, SyntaxError::*
+    },
+
+    parser::ast::{
+        AssignOp, BinOp, Branch, Expr, Ident, LeftSide, 
+        Literal, Pattern, Stmt, Subscript, Type, UnaryOp,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -563,6 +571,9 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    /// previously, ? was short circuiting on bad then branches, which messed up checking else if/else
+    /// this happened because ? returns immediately when a single branch returns None
+    /// type inference failed, so the function exited early
     fn infer_if_type(
         &mut self,
         cond: &Expr<'src>,
@@ -570,40 +581,45 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         else_: Option<&Expr<'src>>,
         expected: Option<&Type<'src>>,
     ) -> Option<Type<'src>> {
-        let cond_type = self.infer_expr_type_with_hint(cond, Some(&Type::Bool))?;
-        if cond_type != Type::Bool {
+        // confirm the if evaluates to a boolean condition
+        let cond_type = self.infer_expr_type_with_hint(cond, Some(&Type::Bool));
+        if cond_type.as_ref().is_some_and(|typ| *typ != Type::Bool) {
             self.push_error(
                 cond.span(),
                 Semantic(TypeMismatch("if condition must evaluate to bool")),
             );
-            return None;
         }
 
         let then_type =
-            self.infer_expr_type_with_hint(then, else_.map_or(Some(&Type::Unit), |_| expected))?;
+            self.infer_expr_type_with_hint(then, else_.map_or(Some(&Type::Unit), |_| expected));
 
         match else_ {
             Some(else_expr) => {
-                let else_type = self.infer_expr_type_with_hint(else_expr, expected)?;
+                let else_type = self.infer_expr_type_with_hint(else_expr, expected);
 
-                if then_type == else_type {
-                    Some(then_type)
-                } else {
-                    self.push_error(
-                        then.span(),
-                        Semantic(TypeMismatch("if branches must evaluate to the same type")),
-                    );
-                    None
+                match (then_type, else_type) {
+                    (Some(then_type), Some(else_type)) if then_type == else_type => {
+                        Some(then_type)
+                    }
+                    (Some(_), Some(_)) => {
+                        self.push_error(
+                            then.span(),
+                            Semantic(TypeMismatch("if branches must evaluate to the same type")),
+                        );
+                        None
+                    }
+                    _ => None,
                 }
             }
-            None if then_type == Type::Unit => Some(Type::Unit),
-            None => {
+            None if then_type.as_ref().is_some_and(|typ| *typ == Type::Unit) => Some(Type::Unit),
+            None if then_type.is_some() => {
                 self.push_error(
                     then.span(),
                     Semantic(TypeMismatch("if without else must evaluate to unit")),
                 );
                 None
             }
+            None => None,
         }
     }
 
@@ -785,6 +801,129 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
+    fn infer_subscript_type(&mut self, sub: &Subscript<'src>) -> Option<Type<'src>> {
+        match sub {
+            Subscript::Index(expr) => self.infer_expr_type(expr),
+            Subscript::Range { start, end } => {
+                if let Some(start) = start {
+                    let _ = self.infer_expr_type(start);
+                }
+                if let Some(end) = end {
+                    let _ = self.infer_expr_type(end);
+                }
+                None
+            }
+        }
+    }
+
+    fn check_while_expr(&mut self, cond: &Expr<'src>, body: &Expr<'src>) -> Option<Type<'src>> {
+        let cond_type = self.infer_expr_type_with_hint(cond, Some(&Type::Bool));
+        if cond_type.as_ref().is_some_and(|typ| *typ != Type::Bool) {
+            self.push_error(
+                cond.span(),
+                Semantic(TypeMismatch("while condition must evaluate to bool")),
+            );
+        }
+
+        let _ = self.infer_expr_type_with_hint(body, Some(&Type::Unit));
+        Some(Type::Unit)
+    }
+
+    fn analyze_pattern_exprs(&mut self, pattern: &Pattern<'src>) {
+        match pattern {
+            Pattern::Range { start, end } => {
+                if let Some(start) = start {
+                    let _ = self.infer_expr_type(start);
+                }
+                if let Some(end) = end {
+                    let _ = self.infer_expr_type(end);
+                }
+            }
+            Pattern::Or(patterns) | Pattern::Tuple(patterns) => {
+                for pattern in patterns {
+                    self.analyze_pattern_exprs(pattern);
+                }
+            }
+            Pattern::Wildcard | Pattern::Ident(_) | Pattern::Literal(_) => {}
+        }
+    }
+
+    fn declare_pattern_bindings(&mut self, pattern: &Pattern<'src>, typ: Type<'src>) {
+        match pattern {
+            Pattern::Ident(ident) => {
+                self.declare_binding(ident, typ, false, None);
+            }
+            Pattern::Or(patterns) | Pattern::Tuple(patterns) => {
+                for pattern in patterns {
+                    self.declare_pattern_bindings(pattern, typ.clone());
+                }
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Range { .. } => {}
+        }
+    }
+
+    fn check_for_expr(
+        &mut self,
+        pattern: &Pattern<'src>,
+        iter: &Expr<'src>,
+        body: &Expr<'src>,
+    ) -> Option<Type<'src>> {
+        self.analyze_pattern_exprs(pattern);
+        let item_type = self.infer_expr_type(iter).unwrap_or(Type::Inferred);
+
+        self.enter_scope();
+        self.declare_pattern_bindings(pattern, item_type);
+        let _ = self.infer_expr_type_with_hint(body, Some(&Type::Unit));
+        self.exit_scope();
+
+        Some(Type::Unit)
+    }
+
+    fn check_match_expr(
+        &mut self,
+        item: &Expr<'src>,
+        branches: &[Branch<'src>],
+        expected: Option<&Type<'src>>,
+    ) -> Option<Type<'src>> {
+        let _ = self.infer_expr_type(item);
+        let mut branch_type = None;
+
+        for branch in branches {
+            self.analyze_pattern_exprs(&branch.pattern);
+
+            if let Some(guard) = branch.guard.as_deref() {
+                let guard_type = self.infer_expr_type_with_hint(guard, Some(&Type::Bool));
+                if guard_type.as_ref().is_some_and(|typ| *typ != Type::Bool) {
+                    self.push_error(
+                        guard.span(),
+                        Semantic(TypeMismatch("match guard must evaluate to bool")),
+                    );
+                }
+            }
+
+            let current_type = match &branch.body {
+                Stmt::Expr(expr) => self.infer_expr_type_with_hint(expr, expected),
+                stmt => {
+                    self.analyze_stmt(stmt);
+                    Some(Type::Unit)
+                }
+            };
+
+            match (&branch_type, current_type) {
+                (None, Some(typ)) => branch_type = Some(typ),
+                (Some(expected), Some(actual)) if expected != &actual => {
+                    self.push_error(
+                        branch.body.span(),
+                        Semantic(TypeMismatch("match arms must evaluate to the same type")),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        branch_type
+    }
+
     fn infer_expr_type_with_hint(
         &mut self,
         expr: &Expr<'src>,
@@ -817,6 +956,48 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             Expr::If { cond, then, else_ } => {
                 self.infer_if_type(cond, then, else_.as_deref(), expected)
             }
+            Expr::While { cond, body } => self.check_while_expr(cond, body),
+            Expr::Match { item, branches } => self.check_match_expr(item, branches, expected),
+            Expr::For {
+                pattern,
+                iter,
+                body,
+            } => self.check_for_expr(pattern, iter, body),
+            Expr::Field { obj, .. } => {
+                let _ = self.infer_expr_type(obj);
+                None
+            }
+            Expr::Method { receiver, args, .. } => {
+                let _ = self.infer_expr_type(receiver);
+                for arg in args {
+                    let _ = self.infer_expr_type(arg);
+                }
+                None
+            }
+            Expr::Index { obj, sub } => {
+                let _ = self.infer_expr_type(obj);
+                let _ = self.infer_subscript_type(sub);
+                None
+            }
+            Expr::StructLiteral { fields, .. } => {
+                for (name, value) in fields {
+                    if let Some(value) = value {
+                        let _ = self.infer_expr_type(value);
+                    } else {
+                        let _ = self.resolve_ident_type(name);
+                    }
+                }
+                None
+            }
+            Expr::Range { start, end } => {
+                if let Some(start) = start {
+                    let _ = self.infer_expr_type(start);
+                }
+                if let Some(end) = end {
+                    let _ = self.infer_expr_type(end);
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -833,6 +1014,22 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         Type::Func {
             params: params.iter().map(|(_, typ)| typ.clone()).collect(),
             ret: Box::new(ret.clone()),
+        }
+    }
+
+    fn check_func_body(
+        &mut self,
+        typ: &Type<'src>,
+        args: &[(Ident<'src>, Type<'src>)],
+        body: Option<&Expr<'src>>,
+    ) {
+        if let Some(body) = body {
+            self.enter_scope();
+            for (arg, typ) in args {
+                self.declare_binding(arg, typ.clone(), false, None);
+            }
+            let _ = self.infer_expr_type_with_hint(body, Some(typ));
+            self.exit_scope();
         }
     }
 
@@ -895,7 +1092,10 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
     fn check_func_decl(&mut self, node: &Stmt<'src>) {
         let Stmt::FuncDecl {
-            name, typ, args, ..
+            name,
+            typ,
+            args,
+            body,
         } = node
         else {
             return;
@@ -903,6 +1103,22 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
         let func_type = self.function_type_from_parts(args, typ);
         self.declare_binding(name, func_type, false, None);
+        self.check_func_body(typ, args, body.as_ref());
+    }
+
+    fn check_struct_decl(&mut self, node: &Stmt<'src>) {
+        let Stmt::StructDecl { methods, .. } = node else {
+            return;
+        };
+
+        for method in methods {
+            if let Stmt::FuncDecl {
+                typ, args, body, ..
+            } = method
+            {
+                self.check_func_body(typ, args, body.as_ref());
+            }
+        }
     }
 
     fn analyze_stmt(&mut self, stmt: &Stmt<'src>) {
@@ -915,13 +1131,13 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             }
             Stmt::VarDecl { .. } => self.check_decl(stmt),
             Stmt::FuncDecl { .. } => self.check_func_decl(stmt),
+            Stmt::StructDecl { .. } => self.check_struct_decl(stmt),
 
             // unchecked for right now (break and continue should only be used in loops)
             // error shouldn't exist at this stage
             Stmt::Return(None)
             | Stmt::Break
             | Stmt::Continue
-            | Stmt::StructDecl { .. }
             | Stmt::Error
             | Stmt::Include { .. } => {}
         }

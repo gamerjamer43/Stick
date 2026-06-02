@@ -477,7 +477,7 @@ impl<'src, 't> Parser<'src, 't> {
         left
     }
 
-    // gonna change the name, but this is all patterns that can be in a for loop (and potentially match and shit)
+    // gonna change the name, but this is all patterns that are allowed for use inside "for" and "match" statements
     fn parse_pattern(&mut self) -> Pattern<'src> {
         match self.cur() {
             Some(Token::Underscore) => {
@@ -503,6 +503,43 @@ impl<'src, 't> Parser<'src, 't> {
                     self.take_ident()
                         .expect("identifier disappeared while parsing pattern"),
                 )
+            }
+
+            Some(Token::LitInteger(value)) => {
+                let span = self.cur_span();
+                self.advance();
+                Pattern::Literal(Literal::Int(value, span))
+            }
+
+            Some(Token::LitFloat(value)) => {
+                let span = self.cur_span();
+                self.advance();
+                Pattern::Literal(Literal::Float(value, span))
+            }
+
+            Some(Token::LitString(value)) => {
+                let span = self.cur_span();
+                self.advance();
+                Pattern::Literal(Literal::String(value, span))
+            }
+
+            Some(Token::LitChar(value)) => {
+                let span = self.cur_span();
+                self.advance();
+                Pattern::Literal(Literal::Char(value, span))
+            }
+
+            Some(Token::Bool(value)) => {
+                let span = self.cur_span();
+                let value = *value;
+                self.advance();
+                Pattern::Literal(Literal::Bool(value, span))
+            }
+
+            Some(Token::Unit) => {
+                let span = self.cur_span();
+                self.advance();
+                Pattern::Literal(Literal::Unit(span))
             }
 
             // tuples
@@ -844,8 +881,6 @@ impl<'src, 't> Parser<'src, 't> {
     }
 
     fn parse_match_expr(&mut self) -> Expr<'src> {
-        self.advance();
-
         // an expression is what gets matched (whether that be a value or something that evaluates to a value)
         let item = self.parse_expr(0);
 
@@ -1266,6 +1301,7 @@ impl<'src, 't> Parser<'src, 't> {
                 | Token::If
                 | Token::While
                 | Token::For
+                | Token::Match
                 | Token::Minus
                 | Token::PlusPlus
                 | Token::MinusMinus
