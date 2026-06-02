@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::{collections::HashMap, time::Instant};
+use std::{collections::{HashMap, HashSet}, time::Instant};
 
 use crate::{
     error::{
@@ -40,6 +40,11 @@ struct Binding<'src> {
     value: Option<ConstValue>,
 }
 
+#[derive(Debug, Clone)]
+struct StructInfo<'src> {
+    fields: Vec<(Ident<'src>, Type<'src>)>,
+}
+
 pub struct Analyzer<'a, 'src> {
     pub path: &'a str,
     pub src: &'src str,
@@ -50,12 +55,15 @@ pub struct Analyzer<'a, 'src> {
 
     scopes: Vec<HashMap<&'src str, Binding<'src>>>,
     functions: HashMap<&'src str, Type<'src>>,
+    structs: HashMap<&'src str, StructInfo<'src>>,
+    current_struct: Option<&'src str>,
     next_symbol_id: usize,
 }
 
 impl<'a, 'src> Analyzer<'a, 'src> {
     pub fn new(path: &'a str, src: &'src str, nodes: Vec<Stmt<'src>>) -> Self {
         let functions = Self::collect_functions(&nodes);
+        let structs = Self::collect_structs(&nodes);
         Self {
             path,
             src,
@@ -65,6 +73,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             errors: Vec::new(),
             scopes: vec![HashMap::new()],
             functions,
+            structs,
+            current_struct: None,
             next_symbol_id: 0,
         }
     }
@@ -84,6 +94,21 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                     Type::Func {
                         params: args.iter().map(|(_, typ)| typ.clone()).collect(),
                         ret: Box::new(typ.clone()),
+                    },
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn collect_structs(nodes: &[Stmt<'src>]) -> HashMap<&'src str, StructInfo<'src>> {
+        nodes
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::StructDecl { name, fields, .. } => Some((
+                    name.0,
+                    StructInfo {
+                        fields: fields.clone(),
                     },
                 )),
                 _ => None,
@@ -150,6 +175,42 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             self.push_error(ident.span(), Semantic(UnknownIdentifier(ident.0)));
             None
         })
+    }
+
+    fn resolve_struct_literal_type(
+        &mut self,
+        typ: &Type<'src>,
+    ) -> Option<(&'src str, StructInfo<'src>)> {
+        let (name, span) = match typ {
+            Type::Ident(ident) if ident.0 == "Self" => match self.current_struct {
+                Some(name) => (name, ident.span()),
+                None => {
+                    self.push_error(
+                        ident.span(),
+                        Semantic(InvalidOperation("`Self` can only be used inside a struct")),
+                    );
+                    return None;
+                }
+            },
+
+            Type::Ident(ident) => (ident.0, ident.span()),
+
+            _ => {
+                self.push_error(
+                    typ.span(),
+                    Semantic(InvalidOperation("struct literal requires a struct type")),
+                );
+                return None;
+            }
+        };
+
+        match self.structs.get(name).cloned() {
+            Some(info) => Some((name, info)),
+            None => {
+                self.push_error(span, Semantic(UnknownIdentifier(name)));
+                None
+            }
+        }
     }
 
     fn declare_binding(
@@ -924,6 +985,71 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         branch_type
     }
 
+    /// ensures that the arguments provided into a struct literal fit or can coerce to the provided type
+    fn check_struct_literal(
+        &mut self,
+        typ: &Type<'src>,
+        fields: &[(Ident<'src>, Option<Expr<'src>>)],
+    ) -> Option<Type<'src>> {
+        let (struct_name, info) = self.resolve_struct_literal_type(typ)?;
+        let field_types: HashMap<&'src str, Type<'src>> = info
+            .fields
+            .iter()
+            .map(|(name, typ)| (name.0, typ.clone()))
+            .collect();
+        let mut provided = HashSet::new();
+
+        for (name, value) in fields {
+            if !provided.insert(name.0) {
+                self.push_error(
+                    name.span(),
+                    Semantic(InvalidOperation("struct literal contains a duplicate field")),
+                );
+                continue;
+            }
+
+            let Some(field_type) = field_types.get(name.0) else {
+                self.push_error(
+                    name.span(),
+                    Semantic(InvalidOperation("struct literal contains an unknown field")),
+                );
+
+                if let Some(value) = value {
+                    let _ = self.infer_expr_type(value);
+                }
+                continue;
+            };
+
+            let actual_type = match value {
+                Some(value) => self.infer_expr_type_with_hint(value, Some(field_type)),
+                None => self.resolve_ident_type(name),
+            };
+
+            if let Some(actual_type) = actual_type
+                && !self.can_assign(field_type, &actual_type) {
+                    self.push_error(
+                        value.as_ref().map_or_else(|| name.span(), Expr::span),
+                        Semantic(TypeMismatch(
+                            "struct field value is not assignable to declared field type",
+                        )),
+                    );
+                }
+        }
+
+        for (name, _) in &info.fields {
+            if !provided.contains(name.0) {
+                self.push_error(
+                    typ.span(),
+                    Semantic(InvalidOperation(
+                        "struct literal is missing a required field",
+                    )),
+                );
+            }
+        }
+
+        Some(Type::Ident(Ident(struct_name, typ.span())))
+    }
+
     fn infer_expr_type_with_hint(
         &mut self,
         expr: &Expr<'src>,
@@ -979,16 +1105,7 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 let _ = self.infer_subscript_type(sub);
                 None
             }
-            Expr::StructLiteral { fields, .. } => {
-                for (name, value) in fields {
-                    if let Some(value) = value {
-                        let _ = self.infer_expr_type(value);
-                    } else {
-                        let _ = self.resolve_ident_type(name);
-                    }
-                }
-                None
-            }
+            Expr::StructLiteral { typ, fields } => self.check_struct_literal(typ, fields),
             Expr::Range { start, end } => {
                 if let Some(start) = start {
                     let _ = self.infer_expr_type(start);
@@ -1107,9 +1224,12 @@ impl<'a, 'src> Analyzer<'a, 'src> {
     }
 
     fn check_struct_decl(&mut self, node: &Stmt<'src>) {
-        let Stmt::StructDecl { methods, .. } = node else {
+        let Stmt::StructDecl { name, methods, .. } = node else {
             return;
         };
+
+        let previous_struct = self.current_struct;
+        self.current_struct = Some(name.0);
 
         for method in methods {
             if let Stmt::FuncDecl {
@@ -1119,6 +1239,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
                 self.check_func_body(typ, args, body.as_ref());
             }
         }
+
+        self.current_struct = previous_struct;
     }
 
     fn analyze_stmt(&mut self, stmt: &Stmt<'src>) {

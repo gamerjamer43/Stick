@@ -1,6 +1,14 @@
+// if analyzer is working as expected, delete this for an error
+// TODO: examine why we can return buf as an i32
+// TODO 2: add positional args: fn writeln(buf: str = "\n") -> None
+fn writeln(buf: str) -> i32 {
+    return buf
+}
+
 // statmements and blocks
 
-let five: u8 = 5
+// if this is not deemed mutable, analyzer should error
+let mutable five: u8 = 5
 
 if five == 5 {
     writeln("well fucking obviously {five} == 5")
@@ -67,3 +75,13 @@ struct Struct {
         return self.a + self.b
     }
 }
+
+// should error on BOTH values as neither fit
+// struct Test {
+//     a: i32;
+//     b: i32;
+// 
+//     fn new(self, a: i64, b: i64) -> Self {
+//         return Self { a, b }
+//     }
+// }

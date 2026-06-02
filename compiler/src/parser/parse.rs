@@ -1166,7 +1166,20 @@ impl<'src, 't> Parser<'src, 't> {
                 inner
             }
 
-            Token::Identifier(name) => Expr::Ident(Ident(name, span)),
+            Token::Identifier(name) => {
+                let name = *name;
+                let typ = Type::Ident(Ident(name, span.clone()));
+                if name
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_uppercase)
+                    && self.matches(&Token::LBrace)
+                {
+                    self.parse_struct_literal(typ)
+                } else {
+                    Expr::Ident(Ident(name, span))
+                }
+            }
             Token::SelfType => {
                 let typ = Type::Ident(Ident("Self", span.clone()));
                 if self.matches(&Token::LBrace) {
