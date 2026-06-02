@@ -49,10 +49,21 @@ fn names(lst: ...str) -> () {
     writeln()
 }
 
+let case: i8 = 1
 match case {
     1 -> writeln("hi")
     _ -> writeln("error")
 }
 
+struct Struct {
+    a: i32;
+    b: i32;
 
-// TODO: match statements
+    fn new(self, a: i32, b: i32) -> Self {
+        return Self { a, b }
+    }
+
+    fn add(self) -> i64 {
+        return self.a + self.b
+    }
+}

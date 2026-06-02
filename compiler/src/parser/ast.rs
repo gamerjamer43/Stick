@@ -122,6 +122,45 @@ pub enum Type<'src> {
     Error,
 }
 
+impl<'src> Type<'src> {
+    pub fn span(&self) -> Range<usize> {
+        match self {
+            Type::Ident(ident) => ident.span(),
+            Type::Path(parts) => parts
+                .first()
+                .zip(parts.last())
+                .map(|(first, last)| join_spans(first.span(), last.span()))
+                .unwrap_or(0..0),
+            Type::Tuple(types) => types
+                .first()
+                .zip(types.last())
+                .map(|(first, last)| join_spans(first.span(), last.span()))
+                .unwrap_or(0..0),
+            Type::Array { typ, .. } | Type::VarArgs(typ) => typ.span(),
+            Type::Func { params, ret } => params
+                .first()
+                .map(|first| join_spans(first.span(), ret.span()))
+                .unwrap_or_else(|| ret.span()),
+            Type::I8
+            | Type::U8
+            | Type::Bool
+            | Type::Char
+            | Type::I16
+            | Type::U16
+            | Type::I32
+            | Type::U32
+            | Type::F32
+            | Type::I64
+            | Type::U64
+            | Type::F64
+            | Type::Unit
+            | Type::Str
+            | Type::Inferred
+            | Type::Error => 0..0,
+        }
+    }
+}
+
 /// a small list of everything that can be on the left hand side of an assignment
 #[derive(Debug, Clone, PartialEq)]
 pub enum LeftSide<'src> {
@@ -311,6 +350,12 @@ pub enum Expr<'src> {
         sub: Subscript<'src>,
     },
 
+    // used for struct creation, None == field shorthand, like `Self { a }`.
+    StructLiteral {
+        typ: Type<'src>,
+        fields: Vec<(Ident<'src>, Option<Expr<'src>>)>,
+    },
+
     // a scoped block, used for any sort of "statement".
     // stores the instructions inside and what it evaluates to (or none)
     Block {
@@ -375,6 +420,15 @@ impl<'src> Expr<'src> {
                 .map(|arg| join_spans(receiver.span(), arg.span()))
                 .unwrap_or_else(|| join_spans(receiver.span(), method.span())),
             Expr::Index { obj, sub } => join_spans(obj.span(), sub.span()),
+            Expr::StructLiteral { typ, fields } => fields
+                .last()
+                .map(|(_, expr)| {
+                    expr.as_ref()
+                        .map(Expr::span)
+                        .unwrap_or_else(|| typ.span())
+                })
+                .map(|last_span| join_spans(typ.span(), last_span))
+                .unwrap_or_else(|| typ.span()),
             Expr::Block { stmts, tail } => tail
                 .as_ref()
                 .map(|expr| expr.span())
@@ -475,6 +529,12 @@ pub enum Stmt<'src> {
         body: Option<Expr<'src>>,
     },
 
+    StructDecl {
+        name: Ident<'src>,
+        fields: Vec<(Ident<'src>, Type<'src>)>,
+        methods: Vec<Stmt<'src>>,
+    },
+
     // include a source file for compilation
     Include {
         path: &'src str,
@@ -496,6 +556,10 @@ impl<'src> Stmt<'src> {
             Stmt::FuncDecl { name, body, .. } => body
                 .as_ref()
                 .map(|expr| join_spans(name.span(), expr.span()))
+                .unwrap_or_else(|| name.span()),
+            Stmt::StructDecl { name, methods, .. } => methods
+                .last()
+                .map(|method| join_spans(name.span(), method.span()))
                 .unwrap_or_else(|| name.span()),
             Stmt::Include { .. } => 0..0,
             Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Error => 0..0,

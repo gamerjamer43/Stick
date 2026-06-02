@@ -143,6 +143,11 @@ pub enum Token<'src> {
     #[token("struct")]   Struct,
     #[token("enum")]     Enum,
 
+    // during semantic phase, this resolves to the struct type it lives inside
+    // i.e. inside of Name, Self refers to Name
+    #[token("Self")]
+    SelfType,
+
     // lifetimes like 'a (may add to give the user more handlage, trying to allow for any paradigm the user wants)
     // #[regex(r"'[A-Za-z_][A-Za-z0-9_]*", |lex| lex.slice())]
     // Lifetime(&'src str),

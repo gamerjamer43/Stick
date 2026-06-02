@@ -66,7 +66,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
     }
 
     fn collect_functions(nodes: &[Stmt<'src>]) -> HashMap<&'src str, Type<'src>> {
-        nodes.iter()
+        nodes
+            .iter()
             .filter_map(|stmt| match stmt {
                 Stmt::FuncDecl {
                     name, typ, args, ..
@@ -150,10 +151,16 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         mutable: bool,
         value: Option<ConstValue>,
     ) -> bool {
-        if self.scopes.last().is_some_and(|scope| scope.contains_key(name.0)) {
+        if self
+            .scopes
+            .last()
+            .is_some_and(|scope| scope.contains_key(name.0))
+        {
             self.push_error(
                 name.span(),
-                Semantic(InvalidOperation("identifier is already declared in this scope")),
+                Semantic(InvalidOperation(
+                    "identifier is already declared in this scope",
+                )),
             );
             return false;
         }
@@ -215,13 +222,15 @@ impl<'a, 'src> Analyzer<'a, 'src> {
     }
 
     fn is_signed_numeric(typ: &Type<'src>) -> bool {
-        matches!(typ, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64)
+        matches!(
+            typ,
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64
+        )
     }
 
     /// check if two types can be compared for equality
     fn are_comparable_for_equality(lhs: &Type<'src>, rhs: &Type<'src>) -> bool {
-        (Self::is_numeric(lhs) && Self::is_numeric(rhs))
-            || (lhs == rhs)
+        (Self::is_numeric(lhs) && Self::is_numeric(rhs)) || (lhs == rhs)
     }
 
     /// check if two types can be compared for ordering
@@ -311,7 +320,9 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
         match expr {
             Expr::Literal(literal) => self.const_from_literal(literal),
-            Expr::Ident(ident) => self.lookup_binding(ident.0).and_then(|binding| binding.value.clone()),
+            Expr::Ident(ident) => self
+                .lookup_binding(ident.0)
+                .and_then(|binding| binding.value.clone()),
 
             Expr::Unary { op, expr } => match (op, self.eval_const(expr)?) {
                 (Neg, Int(value)) => Some(Int(value.checked_neg()?)),
@@ -365,7 +376,11 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         }
     }
 
-    fn sanitized_const_value(&self, typ: &Type<'src>, value: Option<ConstValue>) -> Option<ConstValue> {
+    fn sanitized_const_value(
+        &self,
+        typ: &Type<'src>,
+        value: Option<ConstValue>,
+    ) -> Option<ConstValue> {
         value.filter(|value| self.const_fit(typ, value) == ConstFit::Fits)
     }
 
@@ -406,7 +421,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
     }
 
     fn binding_is_mutable(&self, name: &'src str) -> bool {
-        self.lookup_binding(name).is_some_and(|binding| binding.mutable)
+        self.lookup_binding(name)
+            .is_some_and(|binding| binding.mutable)
     }
 
     fn require_mutable_ident(&mut self, ident: &Ident<'src>) -> bool {
@@ -563,10 +579,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             return None;
         }
 
-        let then_type = self.infer_expr_type_with_hint(
-            then,
-            else_.map_or(Some(&Type::Unit), |_| expected),
-        )?;
+        let then_type =
+            self.infer_expr_type_with_hint(then, else_.map_or(Some(&Type::Unit), |_| expected))?;
 
         match else_ {
             Some(else_expr) => {
@@ -721,7 +735,11 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             return self.infer_literal_type(literal);
         };
 
-        match self.const_from_literal(literal).as_ref().map(|value| self.const_fit(expected, value)) {
+        match self
+            .const_from_literal(literal)
+            .as_ref()
+            .map(|value| self.const_fit(expected, value))
+        {
             Some(ConstFit::Fits) => expected.clone(),
             _ => self.infer_literal_type(literal),
         }
@@ -736,7 +754,10 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         let (name, target_type) = self.resolve_assign_target(lhs)?;
         let inferred_rhs_type = self.infer_expr_type_with_hint(rhs, Some(&target_type))?;
         let folded_rhs = self.eval_const(rhs);
-        let rhs_type = match folded_rhs.as_ref().map(|value| self.const_fit(&target_type, value)) {
+        let rhs_type = match folded_rhs
+            .as_ref()
+            .map(|value| self.const_fit(&target_type, value))
+        {
             Some(ConstFit::Fits) => target_type.clone(),
             _ => inferred_rhs_type,
         };
@@ -748,8 +769,13 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             }
 
             Err(err) => {
-                let err = match folded_rhs.as_ref().map(|value| self.const_fit(&target_type, value)) {
-                    Some(ConstFit::Overflow) => Overflow("assigned constant overflows the target type"),
+                let err = match folded_rhs
+                    .as_ref()
+                    .map(|value| self.const_fit(&target_type, value))
+                {
+                    Some(ConstFit::Overflow) => {
+                        Overflow("assigned constant overflows the target type")
+                    }
                     _ => err,
                 };
 
@@ -785,7 +811,9 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             }
             Expr::Call { func, args } => self.check_call(func, args),
             Expr::Assign { op, lhs, rhs } => self.check_assign_expr(op, lhs, rhs),
-            Expr::Block { stmts, tail } => self.analyze_block_expr(stmts, tail.as_deref(), expected),
+            Expr::Block { stmts, tail } => {
+                self.analyze_block_expr(stmts, tail.as_deref(), expected)
+            }
             Expr::If { cond, then, else_ } => {
                 self.infer_if_type(cond, then, else_.as_deref(), expected)
             }
@@ -797,7 +825,11 @@ impl<'a, 'src> Analyzer<'a, 'src> {
         self.infer_expr_type_with_hint(expr, None)
     }
 
-    fn function_type_from_parts(&self, params: &[(Ident<'src>, Type<'src>)], ret: &Type<'src>) -> Type<'src> {
+    fn function_type_from_parts(
+        &self,
+        params: &[(Ident<'src>, Type<'src>)],
+        ret: &Type<'src>,
+    ) -> Type<'src> {
         Type::Func {
             params: params.iter().map(|(_, typ)| typ.clone()).collect(),
             ret: Box::new(ret.clone()),
@@ -847,7 +879,9 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             Ok(resolved) => resolved,
             Err(err) => {
                 let err = match folded_init.as_ref().map(|value| self.const_fit(typ, value)) {
-                    Some(ConstFit::Overflow) => Overflow("initializer constant overflows the declared type"),
+                    Some(ConstFit::Overflow) => {
+                        Overflow("initializer constant overflows the declared type")
+                    }
                     _ => err,
                 };
 
@@ -884,7 +918,12 @@ impl<'a, 'src> Analyzer<'a, 'src> {
 
             // unchecked for right now (break and continue should only be used in loops)
             // error shouldn't exist at this stage
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Error | Stmt::Include { .. } => {}
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::StructDecl { .. }
+            | Stmt::Error
+            | Stmt::Include { .. } => {}
         }
     }
 
@@ -901,7 +940,8 @@ impl<'a, 'src> Analyzer<'a, 'src> {
             self.analyze_stmt(stmt);
         }
 
-        let tail_type = tail.and_then(|tail_expr| self.infer_expr_type_with_hint(tail_expr, expected));
+        let tail_type =
+            tail.and_then(|tail_expr| self.infer_expr_type_with_hint(tail_expr, expected));
         self.exit_scope();
         tail_type
     }

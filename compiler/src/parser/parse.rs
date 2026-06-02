@@ -212,6 +212,54 @@ impl<'src, 't> Parser<'src, 't> {
         }
     }
 
+    /// parsing for struct literals. to instantiate a struct, use StructName {field: val, comma: seperated}
+    fn parse_struct_literal(&mut self, typ: Type<'src>) -> Expr<'src> {
+        self.advance();
+        self.eat_newlines();
+
+        let mut fields = Vec::with_capacity(8);
+        while !self.matches(&Token::RBrace) {
+            let name = match self.take_ident() {
+                Some(name) => name,
+                None => {
+                    self.error(Parse(MissingExpected(
+                        "expected field name in struct literal",
+                    )));
+                    break;
+                }
+            };
+
+            // if theres a colon provided, a value is slotted, if not something went wrong 
+            // (and will be dealt with at semantic analysis)
+            let value = if self.matches(&Token::Colon) {
+                self.advance();
+                Some(self.parse_expr(0))
+            } else {
+                None
+            };
+            fields.push((name, value));
+
+            // newlines dont matter, values should be comma seperated
+            self.eat_newlines();
+            if self.matches(&Token::Comma) {
+                self.advance();
+                self.eat_newlines();
+            } else if !self.matches(&Token::RBrace) {
+                self.error(Parse(MissingExpected(
+                    "expected ',' or '}' in struct literal",
+                )));
+                break;
+            }
+        }
+
+        self.expect_msg(
+            |t: &Token<'_>| matches!(t, Token::RBrace),
+            "expected '}' to close struct literal",
+        );
+
+        Expr::StructLiteral { typ, fields }
+    }
+
     fn postfix_precedence(&self) -> u8 {
         match self.cur() {
             Some(
@@ -517,12 +565,23 @@ impl<'src, 't> Parser<'src, 't> {
                     }
                 };
 
-                self.expect_msg(
-                    |t: &Token<'_>| matches!(t, Token::Colon),
-                    "arguments need to be typed, or specifically denoted compiler inferred (likely missing ':' after argument name)"
-                );
+                // self is a special argument 
+                // (change to base references to self off whatever positional arg 0's name is)
+                // i.e. fn new(this, field: type) lets you use "this" instead of "self"
+                let argtyp: Type<'_> = if argname.0 == "self"
+                    && args.is_empty()
+                    && !self.matches(&Token::Colon)
+                {
+                    Type::Inferred
+                } else {
+                    // if type is provided, parse it. otherwise treat as inferred (type check will match it to the struct type)
+                    self.expect_msg(
+                            |t: &Token<'_>| matches!(t, Token::Colon),
+                            "arguments need to be typed, or specifically denoted compiler inferred (likely missing ':' after argument name)"
+                        );
 
-                let argtyp: Type<'_> = self.parse_type();
+                    self.parse_type()
+                };
                 args.push((argname, argtyp));
 
                 self.eat_newlines();
@@ -586,7 +645,7 @@ impl<'src, 't> Parser<'src, 't> {
 
     fn parse_include(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
         self.advance();
-        
+
         // expect a string literal file path
         match self.cur() {
             Some(Token::LitString(path)) => {
@@ -594,11 +653,94 @@ impl<'src, 't> Parser<'src, 't> {
                 self.advance();
                 Ok(Stmt::Include { path })
             }
-            
+
             _ => Err(Parse(MissingExpected(
                 "include statement requires a string literal path (e.g., include \"path/to/file.stk\")",
             ))),
         }
+    }
+
+    /// parse struct declarations. structs can also contain functions, and are defined by: <br>
+    /// struct Name {
+    ///     field: type
+    /// }
+    fn parse_struct(&mut self) -> Result<Stmt<'src>, SyntaxError<'src>> {
+        self.advance();
+
+        let name = match self.take_ident() {
+            Some(name) => name,
+            None => {
+                return Err(Parse(MissingExpected(
+                    "struct declaration requires a name",
+                )));
+            }
+        };
+
+        if self
+            .expect_msg(
+                |t: &Token<'_>| matches!(t, Token::LBrace),
+                "expected '{' before struct body",
+            )
+            .is_none()
+        {
+            return Ok(Stmt::Error);
+        }
+
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+
+        loop {
+            self.eat_newlines();
+
+            match self.cur() {
+                Some(Token::RBrace) => {
+                    self.advance();
+                    break;
+                }
+
+                Some(Token::Fn) => match self.parse_func() {
+                    Ok(method) => methods.push(method),
+                    Err(e) => self.error(e),
+                },
+
+                Some(Token::Identifier(_)) => {
+                    let field = self
+                        .take_ident()
+                        .expect("identifier disappeared while parsing struct field");
+                    self.expect_msg(
+                        |t: &Token<'_>| matches!(t, Token::Colon),
+                        "expected ':' after struct field name",
+                    );
+                    let typ = self.parse_type();
+                    fields.push((field, typ));
+                }
+
+                Some(_) => {
+                    self.error(Parse(MissingExpected(
+                        "expected field, method, or '}' in struct body",
+                    )));
+                    self.advance();
+                }
+                
+                None => {
+                    return Err(Parse(MissingExpected("expected '}' to close struct body")));
+                }
+            }
+
+            if self.matches_any(&[Token::Newline, Token::Semicolon]) {
+                self.eat_stmt_delimiters();
+            } else if !self.matches(&Token::RBrace) {
+                self.error(Parse(MissingExpected(
+                    "expected ';', newline, or '}' after struct item",
+                )));
+            }
+        }
+
+        Ok(Stmt::StructDecl {
+            name,
+            fields,
+            methods,
+        })
     }
 
     fn parse_for_expr(&mut self) -> Expr<'src> {
@@ -778,7 +920,12 @@ impl<'src, 't> Parser<'src, 't> {
         }
 
         let typ: Type<'src> = match self.expect_msg(
-            |t| matches!(t, &Token::Identifier(_) | &Token::Unit | &Token::Underscore),
+            |t| {
+                matches!(
+                    t,
+                    &Token::Identifier(_) | &Token::SelfType | &Token::Unit | &Token::Underscore
+                )
+            },
             "invalid or missing type",
         ) {
             Some(Token::Identifier(typname)) => match *typname {
@@ -797,6 +944,7 @@ impl<'src, 't> Parser<'src, 't> {
                 "str" => Type::Str,
                 _ => Type::Ident(Ident(typname, self.spans[self.pos - 1].clone())),
             },
+            Some(Token::SelfType) => Type::Ident(Ident("Self", self.spans[self.pos - 1].clone())),
 
             // unit type and inferred have to be handled seperately
             Some(Token::Unit) => Type::Unit,
@@ -852,6 +1000,11 @@ impl<'src, 't> Parser<'src, 't> {
                 },
 
                 Token::Fn => match self.parse_func() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
+                Token::Struct => match self.parse_struct() {
                     Ok(stmt) => stmts.push(stmt),
                     Err(e) => self.error(e),
                 },
@@ -979,6 +1132,14 @@ impl<'src, 't> Parser<'src, 't> {
             }
 
             Token::Identifier(name) => Expr::Ident(Ident(name, span)),
+            Token::SelfType => {
+                let typ = Type::Ident(Ident("Self", span.clone()));
+                if self.matches(&Token::LBrace) {
+                    self.parse_struct_literal(typ)
+                } else {
+                    Expr::Ident(Ident("Self", span))
+                }
+            }
             Token::LitInteger(n) => Expr::Literal(Literal::Int(n, span)),
             Token::LitFloat(n) => Expr::Literal(Literal::Float(n, span)),
             Token::LitString(s) => Expr::Literal(Literal::String(s, span)),
@@ -1094,6 +1255,7 @@ impl<'src, 't> Parser<'src, 't> {
 
                 // expression statements (idents, literals, blocks, if, and others)
                 Token::Identifier(_)
+                | Token::SelfType
                 | Token::LitInteger(_)
                 | Token::LitFloat(_)
                 | Token::LitString(_)
@@ -1117,6 +1279,11 @@ impl<'src, 't> Parser<'src, 't> {
 
                 // same dispatch for parse func
                 Token::Fn => match self.parse_func() {
+                    Ok(stmt) => nodes.push(stmt),
+                    Err(e) => self.error(e),
+                },
+
+                Token::Struct => match self.parse_struct() {
                     Ok(stmt) => nodes.push(stmt),
                     Err(e) => self.error(e),
                 },
